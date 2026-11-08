@@ -25,4 +25,7 @@ dist/
 
 # Logs & temp
 *.log
+audit_log.db
+*.sqlite
+*.sqlite3
 

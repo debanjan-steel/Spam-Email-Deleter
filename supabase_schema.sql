@@ -38,3 +38,4 @@ CREATE TABLE IF NOT EXISTS audit_entries (
 -- Indexes for lightning fast lookups
 CREATE INDEX IF NOT EXISTS idx_audit_entries_batch_id ON audit_entries(batch_id);
 CREATE INDEX IF NOT EXISTS idx_audit_entries_account ON audit_entries(account_email);
+

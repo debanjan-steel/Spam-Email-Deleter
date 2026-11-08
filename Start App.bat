@@ -6,3 +6,4 @@ start "" ".\.venv\Scripts\python.exe" -m streamlit run src/web/app.py --server.p
 timeout /t 2 /nobreak >nul
 start "" "http://localhost:8501"
 exit
+

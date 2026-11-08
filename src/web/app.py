@@ -1,5 +1,5 @@
 """Streamlit Web Dashboard for Intelligent Spam Email Deleter.
-Supports Progressive Web App (PWA) installation and Multiple Gmail Accounts.
+Supports Progressive Web App (PWA) installation, Mobile/Cloud OAuth, and Multiple Gmail Accounts.
 """
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Inject PWA Manifest & Service Worker for 1-Click App Installation
+# Inject PWA Manifest & Service Worker for 1-Click App Installation on Mobile & Desktop
 pwa_header_html = """
 <link rel="manifest" href="/app/static/manifest.json">
 <meta name="theme-color" content="#FF4B4B">
@@ -62,11 +62,28 @@ config_mgr: ConfigManager = st.session_state.config_mgr
 audit_logger: AuditLogger = st.session_state.audit_logger
 auth: GmailAuthenticator = st.session_state.auth
 
+# -------------------------------------------------------------
+# Handle Web/Mobile OAuth Redirect Callback
+# -------------------------------------------------------------
+query_params = st.query_params
+if "code" in query_params:
+    auth_code = query_params["code"]
+    try:
+        # Determine redirect URI matching browser address
+        redirect_uri = "http://localhost:8501"
+        newly_connected = auth.exchange_code(auth_code, redirect_uri=redirect_uri)
+        st.session_state.active_account = newly_connected
+        st.query_params.clear()
+        st.success(f"🎉 Successfully connected `{newly_connected}` via Google OAuth!")
+        st.rerun()
+    except Exception as e:
+        st.query_params.clear()
+        st.error(f"OAuth code exchange failed: {e}")
+
 # Retrieve Connected Accounts
 connected_accounts = auth.list_accounts()
 account_emails = [a["email"] for a in connected_accounts]
 
-# Ensure valid active account selection
 if account_emails:
     if st.session_state.active_account not in account_emails:
         st.session_state.active_account = account_emails[0]
@@ -79,12 +96,12 @@ active_account_info = next((a for a in connected_accounts if a["email"] == activ
 # Sidebar: Multi-Account Switcher & Connection Management
 with st.sidebar:
     st.title("🛡️ Mail Guard")
-    st.caption("Multi-Account Gmail Cleaner & Spam Deleter")
+    st.caption("24/7 Mobile & Desktop Multi-Account Spam Deleter")
     st.divider()
 
     if not auth.has_credentials_file():
         st.error("Missing `credentials.json`")
-        st.info("Download your Google Cloud OAuth Client credentials and place them in the project root or upload via the Setup tab.")
+        st.info("Place your Google Cloud OAuth Client credentials.json in the project root or upload via the Setup tab.")
     else:
         st.subheader("📬 Connected Accounts")
         if connected_accounts:
@@ -110,7 +127,7 @@ with st.sidebar:
                 if st.button("➕ Add Account", use_container_width=True):
                     try:
                         with st.spinner("Opening browser to authorize another Gmail account..."):
-                            new_email = auth.add_account()
+                            new_email = auth.add_account_interactive()
                         st.success(f"Connected `{new_email}`!")
                         st.session_state.active_account = new_email
                         st.session_state.scan_results = []
@@ -129,7 +146,7 @@ with st.sidebar:
             if st.button("🔑 Connect First Gmail Account", type="primary", use_container_width=True):
                 try:
                     with st.spinner("Opening browser for Google OAuth sign-in..."):
-                        first_email = auth.add_account()
+                        first_email = auth.add_account_interactive()
                     st.success(f"Connected `{first_email}`!")
                     st.session_state.active_account = first_email
                     st.rerun()
@@ -138,17 +155,17 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### Safety Guarantee")
-    st.markdown("✅ **Soft-delete only**: Items are moved to Trash (30-day recovery window).")
-    st.markdown("✅ **Immunity Whitelist**: Personal contacts, 2FA codes, order receipts, and starred emails are never deleted.")
-    st.markdown("✅ **Install as App**: In Chrome/Edge, click the **Install App** icon in the address bar to add to your desktop.")
+    st.markdown("✅ **Soft-delete only**: Items moved to Trash (30-day recovery window).")
+    st.markdown("✅ **Zero-touch whitelist**: Personal contacts, 2FA codes, order receipts, and starred emails are never deleted.")
+    st.markdown("✅ **Mobile PWA**: Open in Safari/Chrome on your phone and tap **Add to Home Screen**.")
 
 # Main Application Tabs
-tab_scan, tab_rules, tab_whitelist, tab_audit, tab_setup = st.tabs([
+tab_scan, tab_rules, tab_whitelist, tab_audit, tab_cloud = st.tabs([
     "🔍 Scan & Clean",
     "🎯 Custom Deletion Rules",
     "🛡️ Whitelist & Safeguards",
     "↩️ Audit Log & Undo",
-    "⚙️ Setup & Help",
+    "☁️ Phone & Cloud 24/7 Setup",
 ])
 
 # -------------------------------------------------------------
@@ -219,7 +236,6 @@ with tab_scan:
                         messages = connector.get_messages_batch(unique_mids)
                         results = [scorer.evaluate(m) for m in messages]
                         st.session_state.scan_results = results
-                        # Pre-select items targeted for deletion
                         st.session_state.selected_mids = {
                             r.message_id for r in results if r.action in ("TARGETED_TRASH", "SPAM_TRASH")
                         }
@@ -232,7 +248,6 @@ with tab_scan:
         if results:
             st.divider()
 
-            # Metrics
             total_count = len(results)
             prot_count = sum(1 for r in results if r.is_protected)
             manual_count = sum(1 for r in results if r.action == "TARGETED_TRASH")
@@ -248,7 +263,6 @@ with tab_scan:
 
             st.subheader(f"Candidate Emails ({active_account_email})")
 
-            # Bulk Actions
             col_a, col_b, col_c = st.columns([1, 1, 2])
             with col_a:
                 if st.button("Select All Deletion Candidates"):
@@ -292,7 +306,6 @@ with tab_scan:
                 key="results_editor"
             )
 
-            # Update selected mids from editor
             new_selected = set(
                 edited_df[edited_df["Select"] == True]["Message ID"].tolist()
             )
@@ -300,7 +313,6 @@ with tab_scan:
 
             st.write(f"**{len(new_selected)} emails selected for deletion in {active_account_email}.**")
 
-            # Execution Button
             if new_selected:
                 if st.button(f"🗑️ Move {len(new_selected)} Selected Emails to Trash ({active_account_email})", type="primary"):
                     try:
@@ -316,7 +328,6 @@ with tab_scan:
                                     if success:
                                         trashed_results.append(r)
 
-                        # Record in Audit Log with account email
                         audit_logger.record_batch(
                             batch_id,
                             trashed_results,
@@ -324,10 +335,9 @@ with tab_scan:
                             action_type="TRASH"
                         )
                         
-                        st.success(f"Successfully moved {len(trashed_results)} emails to Trash in `{active_account_email}`! Batch ID: `{batch_id}`")
+                        st.success(f"Moved {len(trashed_results)} emails to Trash in `{active_account_email}`! Batch ID: `{batch_id}`")
                         st.info("You can undo this anytime in the 'Audit Log & Undo' tab.")
                         
-                        # Clear processed from current scan results
                         st.session_state.scan_results = [
                             r for r in results if r.message_id not in new_selected
                         ]
@@ -348,7 +358,6 @@ with tab_rules:
 
     custom_rules = config_mgr.custom_rules
 
-    # Add New Rule
     with st.expander("➕ Add New Deletion Rule", expanded=True):
         col_type, col_val, col_btn = st.columns([1, 2, 1])
         with col_type:
@@ -386,7 +395,6 @@ with tab_rules:
 
     st.divider()
 
-    # Active Rules Display
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -454,7 +462,6 @@ with tab_whitelist:
 
     st.divider()
 
-    # Add Whitelist Entry
     with st.expander("➕ Add Trusted Sender or Domain", expanded=False):
         w_type, w_val, w_btn = st.columns([1, 2, 1])
         with w_type:
@@ -483,7 +490,6 @@ with tab_whitelist:
                             config_mgr.save_whitelist(wl)
                             st.rerun()
 
-    # Active Whitelists
     w_c1, w_c2, w_c3 = st.columns(3)
     with w_c1:
         st.subheader("Trusted Senders")
@@ -544,7 +550,6 @@ with tab_audit:
                     if status == "ACTIVE":
                         if st.button(f"↩️ Undo / Restore Batch", key=f"undo_{bid}", type="primary"):
                             try:
-                                # Ensure we restore on the matching account
                                 service = auth.get_service_for_account(b_acc)
                                 connector = GmailConnector(service)
                                 entries = audit_logger.get_batch_entries(bid)
@@ -563,49 +568,59 @@ with tab_audit:
                     elif status == "RESTORED":
                         st.caption("✅ Already restored.")
 
-                # Table of messages in batch
                 entries = audit_logger.get_batch_entries(bid)
                 if entries:
                     e_df = pd.DataFrame(entries)[["sender_email", "subject", "score", "reason", "trashed_at"]]
                     st.dataframe(e_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 5: SETUP & HELP
+# TAB 5: PHONE & CLOUD 24/7 SETUP
 # -------------------------------------------------------------
-with tab_setup:
-    st.header("⚙️ Setup, 1-Click PWA & Help")
-    
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        st.subheader("📱 Progressive Web App (PWA)")
+with tab_cloud:
+    st.header("☁️ Run 24/7 in the Cloud (Access From Your Phone Anytime)")
+    st.markdown("""
+    To access this app from your **phone 24/7 with your laptop completely turned off**, deploy it to one of these free cloud hosting platforms:
+    """)
+
+    col_h1, col_h2 = st.columns(2)
+    with col_h1:
+        st.subheader("Option A: Streamlit Community Cloud (Recommended & 100% Free)")
         st.markdown("""
-        You do **not** need to keep a terminal open!
-        
-        1. Open the app in **Google Chrome** or **Microsoft Edge**.
-        2. Look at the top right of the browser address bar for the **Install App icon** (or click Menu `...` > **Install Gmail Spam Deleter**).
-        3. Once installed, it launches in its own native app window and adds an icon to your desktop & taskbar!
+        **Zero-cost, permanent cloud hosting designed specifically for Streamlit apps.**
+        1. Push this project folder to your personal **GitHub** repository.
+        2. Go to **[share.streamlit.io](https://share.streamlit.io/)** and sign in with GitHub.
+        3. Click **New app** > Select your repository:
+           - Main file path: `src/web/app.py`
+        4. Click **Deploy!**
+        5. You will get a permanent public HTTPS URL (e.g., `https://yourname-spam-deleter.streamlit.app`).
+        6. Open that link on your phone in **Safari** or **Chrome** > tap **Share / Menu** > **Add to Home Screen**.
+        7. It now opens on your phone anytime like a native app — even with your laptop shut down!
         """)
-    with col_s2:
-        st.subheader("⚡ 1-Click Launchers in Project Folder")
+
+    with col_h2:
+        st.subheader("Option B: Render.com (Free Web Service)")
         st.markdown("""
-        In your project folder, you can simply double click:
-        - **`Open App (Silent).vbs`**: Starts the app silently in the background (no black terminal window!) and opens it in your browser.
-        - **`Open Spam Deleter.url`**: Instant web shortcut directly to the running dashboard.
+        **Alternative free cloud host using Docker or Python.**
+        1. Push this project to GitHub.
+        2. Go to **[render.com](https://render.com)** > click **New +** > **Web Service**.
+        3. Connect your repository (Render automatically reads the included `render.yaml` or `Dockerfile`).
+        4. Click **Create Web Service**.
+        5. You get a live 24/7 link: `https://spam-deleter-xxxx.onrender.com`.
         """)
 
     st.divider()
 
-    st.subheader("🔑 Google Cloud OAuth Setup Guide")
+    st.subheader("🔑 Google OAuth Configuration for Cloud & Mobile")
     st.markdown("""
-    To allow this app to connect to your Gmail accounts safely without passwords:
-    1. Go to [Google Cloud Console](https://console.cloud.google.com/).
-    2. Create a project and search for **Gmail API** > click **Enable**.
-    3. Under **OAuth consent screen**, set user type to **External**, add your Gmail accounts to the **Test users** list.
-    4. Under **Credentials**, click **Create Credentials** > **OAuth client ID** > Application Type: **Desktop app**.
-    5. Download the JSON, rename it to `credentials.json`, and place it in this project folder (or upload below).
+    When running in the cloud, Google requires that your public URL is listed as an authorized redirect URI:
+    1. Go to [Google Cloud Console](https://console.cloud.google.com/) > **APIs & Services** > **Credentials**.
+    2. Edit your OAuth 2.0 Client:
+       - Set Application Type to **Web application** (or add URIs).
+       - Under **Authorized redirect URIs**, add your cloud URL (e.g. `https://your-app.streamlit.app` or `https://your-app.onrender.com`).
+    3. Download the updated `credentials.json` and upload it below.
     """)
 
-    uploaded = st.file_uploader("Upload your downloaded Google Cloud credentials.json", type=["json"])
+    uploaded = st.file_uploader("Upload Google Cloud credentials.json", type=["json"])
     if uploaded is not None:
         target_path = WORKSPACE_ROOT / "credentials.json"
         with open(target_path, "wb") as f:

@@ -11,3 +11,4 @@ WshShell.Run cmd, 0, False
 ' Give server 2 seconds to bind port and open browser
 WScript.Sleep 2000
 WshShell.Run "http://localhost:8501"
+

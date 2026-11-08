@@ -1,5 +1,5 @@
-"""Google OAuth 2.0 Authenticator supporting Multiple Gmail Accounts.
-Allows connecting, listing, switching, and disconnecting multiple Gmail accounts.
+"""Google OAuth 2.0 Authenticator supporting Web Redirect & Multiple Gmail Accounts.
+Supports cloud deployment (Render, Streamlit Cloud, etc.) and mobile PWA usage.
 """
 from pathlib import Path
 import os
@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from googleapiclient.discovery import build, Resource
 
 SCOPES = [
@@ -18,7 +18,7 @@ SCOPES = [
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 class GmailAuthenticator:
-    """Manages multi-account OAuth 2.0 authentication for the Gmail API."""
+    """Manages multi-account OAuth 2.0 authentication for desktop and cloud web apps."""
 
     def __init__(
         self,
@@ -40,7 +40,7 @@ class GmailAuthenticator:
         if legacy_token.exists() and not any(self.tokens_dir.glob("*.json")):
             try:
                 creds = Credentials.from_authorized_user_file(str(legacy_token), SCOPES)
-                if creds and creds.valid or (creds.expired and creds.refresh_token):
+                if creds and (creds.valid or (creds.expired and creds.refresh_token)):
                     if creds.expired:
                         creds.refresh(Request())
                     service = build("gmail", "v1", credentials=creds)
@@ -81,21 +81,68 @@ class GmailAuthenticator:
                         "token_file": str(tf),
                     })
             except Exception:
-                # If token is corrupt or revoked, keep file stem or delete
                 continue
 
         return accounts
 
-    def add_account(self) -> str:
-        """Launches interactive browser OAuth flow to connect a new Gmail account.
+    def get_authorization_url(self, redirect_uri: str) -> Tuple[str, str]:
+        """Generates Google OAuth consent URL for web & mobile browsers.
         
         Returns:
-            The authenticated user's email address.
+            (auth_url, state)
         """
         if not self.credentials_file.exists():
             raise FileNotFoundError(
                 f"Missing '{self.credentials_file.name}'. "
-                "Please place your Google Cloud OAuth Client credentials.json in the project root."
+                "Please place credentials.json in project root or upload via the Setup tab."
+            )
+
+        flow = Flow.from_client_secrets_file(
+            str(self.credentials_file),
+            scopes=SCOPES,
+            redirect_uri=redirect_uri,
+        )
+        auth_url, state = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
+        return auth_url, state
+
+    def exchange_code(self, code: str, redirect_uri: str) -> str:
+        """Exchanges an authorization code returned from Google redirect for tokens.
+        
+        Returns:
+            Authenticated email address.
+        """
+        flow = Flow.from_client_secrets_file(
+            str(self.credentials_file),
+            scopes=SCOPES,
+            redirect_uri=redirect_uri,
+        )
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+
+        service = build("gmail", "v1", credentials=creds)
+        profile = service.users().getProfile(userId="me").execute()
+        email = profile.get("emailAddress")
+
+        if not email:
+            raise ValueError("Could not retrieve email profile for authorized account.")
+
+        filename = f"{self._sanitize_email_for_filename(email)}.json"
+        target_path = self.tokens_dir / filename
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+
+        return email
+
+    def add_account_interactive(self) -> str:
+        """Desktop loopback fallback."""
+        if not self.credentials_file.exists():
+            raise FileNotFoundError(
+                f"Missing '{self.credentials_file.name}'. "
+                "Please place credentials.json in project root."
             )
 
         flow = InstalledAppFlow.from_client_secrets_file(
@@ -103,13 +150,12 @@ class GmailAuthenticator:
         )
         creds = flow.run_local_server(port=0, prompt="consent")
 
-        # Discover which email was signed in
         service = build("gmail", "v1", credentials=creds)
         profile = service.users().getProfile(userId="me").execute()
         email = profile.get("emailAddress")
 
         if not email:
-            raise ValueError("Could not retrieve email profile for the newly authorized account.")
+            raise ValueError("Could not retrieve email profile.")
 
         filename = f"{self._sanitize_email_for_filename(email)}.json"
         target_path = self.tokens_dir / filename
