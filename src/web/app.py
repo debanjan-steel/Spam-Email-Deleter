@@ -210,12 +210,14 @@ with tab_scan:
 
     elif not active_account_email:
         st.header("📬 Connect Your Gmail Account")
-        st.info("Credentials are saved! Click the button in the left sidebar to connect your first Gmail account:")
+        current_redirect = get_current_redirect_uri()
+        st.info("Credentials are saved! Click the button below to connect your first Gmail account:")
+        st.caption(f"OAuth Redirect URI: `{current_redirect}`")
         try:
-            auth_url, _ = auth.get_authorization_url(redirect_uri=get_current_redirect_uri())
+            auth_url, _ = auth.get_authorization_url(redirect_uri=current_redirect)
             st.link_button("🔑 Click Here to Sign In with Google", auth_url, type="primary")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error generating sign-in link: {e}")
 
     else:
         st.header(f"🔍 Scan Mailbox: `{active_account_email}`")
