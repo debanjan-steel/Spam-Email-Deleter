@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+client_secret*.json
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs & temp
+*.log
+

@@ -1,0 +1,33 @@
+# General App Configuration
+general:
+  # When true, emails are moved to the Gmail TRASH folder (safe, 30-day recovery)
+  # When false, emails would be permanently deleted (strongly discouraged)
+  trash_only: true
+  
+  # Default number of emails to retrieve per scan batch
+  batch_size: 50
+  
+  # Maximum emails to inspect per single scan run
+  max_emails_to_scan: 200
+  
+  # Automatically log all actions in local SQLite database for rollback
+  audit_logging: true
+
+# Spam Detection Thresholds
+detection:
+  # Confidence score (0.0 to 1.0) required to classify an email as spam
+  spam_threshold: 0.75
+  
+  # Analyze SPF, DKIM, and DMARC authentication headers
+  check_auth_headers: true
+  
+  # Flag emails containing List-Unsubscribe bulk marketing headers
+  check_unsubscribe_header: true
+  
+  # Use Google Gemini AI for ambiguous/borderline emails
+  use_ai_fallback: false
+  ai_model: "gemini-2.5-flash"
+
+# Storage
+storage:
+  audit_db_path: "audit_log.db"

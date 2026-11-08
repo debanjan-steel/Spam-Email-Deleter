@@ -1,0 +1,26 @@
+# User-Defined Targeted Deletion Rules
+# Emails matching ANY rule below will be targeted for deletion (unless protected by Whitelist).
+
+# Specific email addresses you want automatically deleted
+targeted_senders:
+  # Examples:
+  # - unwanted.promotions@spamsite.com
+  # - persistent.recruiter@coldmail.io
+
+# Senders matching these domain names or suffixes
+targeted_domains:
+  # Examples:
+  # - "spamdeals.xyz"
+  # - "marketingblast.net"
+
+# Subject lines containing any of these keywords or phrases (case-insensitive)
+targeted_subject_keywords:
+  # Examples:
+  # - "exclusive loan offer"
+  # - "claim your cash prize"
+  # - "urgent: account suspended"
+  # - "free bitcoin"
+  # - "hot singles"
+
+# Optional age threshold for bulk promotions (null = disabled, or number of days like 30)
+delete_promotions_older_than_days: null

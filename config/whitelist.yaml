@@ -1,0 +1,52 @@
+# Whitelist & Immunity Safeguards
+# ANY email matching any rule below is PERMANENTLY PROTECTED and will NEVER be deleted.
+
+protection_flags:
+  # Protect any email that has been starred/flagged by the user
+  protect_starred: true
+  
+  # Protect any email marked as "IMPORTANT" by Gmail
+  protect_important: true
+  
+  # Protect any email thread where you have sent an outgoing reply
+  protect_replied_threads: true
+
+# Senders that are 100% immune from deletion
+protected_senders:
+  # Add individual trusted addresses here, e.g.:
+  # - family.member@gmail.com
+  # - boss@company.com
+
+# Domains that are 100% immune from deletion
+protected_domains:
+  - ".gov"
+  - ".edu"
+  - "google.com"
+  - "github.com"
+  - "apple.com"
+  - "microsoft.com"
+  - "paypal.com"
+  - "amazon.com"
+
+# Critical keywords that grant immunity if found in subject or snippet
+protected_keywords:
+  - "2fa"
+  - "two-factor"
+  - "verification code"
+  - "one-time password"
+  - "otp"
+  - "security code"
+  - "password reset"
+  - "invoice"
+  - "receipt"
+  - "order confirmation"
+  - "shipping update"
+  - "flight"
+  - "boarding pass"
+  - "hotel reservation"
+  - "bank statement"
+  - "credit card"
+  - "salary"
+  - "tax form"
+  - "w-2"
+  - "1099"
