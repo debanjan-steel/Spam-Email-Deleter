@@ -29,6 +29,7 @@ import pandas as pd
 from src.connectors.imap_connector import GmailImapConnector
 from src.connectors.gmail_connector import EmailMessage, GmailConnector
 from src.auth.gmail_auth import GmailAuthenticator
+from src.auth.user_manager import UserManager
 from src.config_loader import ConfigManager
 from src.engine.custom_rules import CustomRulesMatcher
 from src.engine.spam_scorer import ClassificationResult, SpamScorer
@@ -117,10 +118,92 @@ pwa_header_html = """
 """
 components.html(pwa_header_html, height=0, width=0)
 
-# Initialize Managers freshly on every run so code updates take effect immediately
-config_mgr: ConfigManager = ConfigManager()
-audit_logger: AuditLogger = AuditLogger()
-auth: GmailAuthenticator = GmailAuthenticator()
+# Initialize User Manager for Multi-Tenant Isolation
+user_mgr: UserManager = UserManager()
+
+# Check Authentication Status
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+
+if not st.session_state.current_user:
+    # ---------------------------------------------------------
+    # AUTHENTICATION SCREEN: LOGIN & CREATE ACCOUNT
+    # ---------------------------------------------------------
+    col_l, col_main, col_r = st.columns([1, 2, 1])
+    with col_main:
+        st.markdown("<h1 style='text-align: center;'>🛡️ Mail Guard</h1>", unsafe_allow_html=True)
+        st.markdown(
+            "<p style='text-align: center; color: #888;'>Multi-User Gmail Cleaner & Intelligent Spam Deleter</p>",
+            unsafe_allow_html=True
+        )
+        st.write("")
+
+        tab_login, tab_register = st.tabs(["🔑 Sign In", "✨ Create Account"])
+
+        with tab_login:
+            st.subheader("Sign In to Your Account")
+            st.caption("Access your private Gmail accounts and spam deletion rules.")
+            with st.form("login_form", clear_on_submit=False):
+                login_user = st.text_input("Username", placeholder="e.g. debanjan or user1", key="login_username_input")
+                login_pass = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pass_input")
+                btn_login = st.form_submit_button("🚀 Sign In", type="primary", use_container_width=True)
+
+            if btn_login:
+                ok, msg, u_data = user_mgr.authenticate(login_user, login_pass)
+                if ok:
+                    st.session_state.current_user = u_data
+                    st.session_state.active_account = None
+                    st.session_state.scan_results = []
+                    st.session_state.selected_mids = set()
+                    st.success(f"🎉 {msg}")
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        with tab_register:
+            st.subheader("Create a New Account")
+            st.caption("Each account gets a dedicated, 100% private sandbox for unlimited Gmail accounts.")
+            with st.form("register_form", clear_on_submit=False):
+                reg_user = st.text_input("Choose Username", placeholder="e.g. debanjan or user1", key="reg_username_input")
+                reg_pass = st.text_input("Choose Password", type="password", placeholder="At least 6 characters", key="reg_pass_input")
+                reg_confirm = st.text_input("Confirm Password", type="password", placeholder="Re-type your password", key="reg_confirm_input")
+                btn_register = st.form_submit_button("✨ Create Account", type="primary", use_container_width=True)
+
+            if btn_register:
+                if reg_pass != reg_confirm:
+                    st.error("Passwords do not match. Please verify your password.")
+                else:
+                    ok, msg, u_data = user_mgr.create_user(reg_user, reg_pass)
+                    if ok:
+                        st.session_state.current_user = u_data
+                        st.session_state.active_account = None
+                        st.session_state.scan_results = []
+                        st.session_state.selected_mids = set()
+                        st.success(f"🎉 {msg}")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        st.divider()
+        st.markdown("""
+        🔒 **Multi-User Isolation & Privacy Guaranteed**:
+        - **Private Gmail Mailboxes**: Your connected Gmail accounts and App Passwords are saved only in your private workspace. Other users on this app cannot see or access them.
+        - **Custom Rules & Whitelists**: Your protected senders and custom blacklist keywords are completely isolated.
+        - **Personal Audit History**: Deletion history and 1-click restore logs are strictly private to your account.
+        """)
+
+    st.stop()
+
+# -------------------------------------------------------------
+# USER IS AUTHENTICATED: LOAD USER-ISOLATED WORKSPACE
+# -------------------------------------------------------------
+current_user = st.session_state.current_user
+user_paths = user_mgr.get_user_paths(current_user["id"])
+
+# Initialize Managers scoped exclusively to the active user's sandbox
+config_mgr: ConfigManager = ConfigManager(config_dir=user_paths["config_dir"])
+audit_logger: AuditLogger = AuditLogger(db_path=user_paths["audit_db"])
+auth: GmailAuthenticator = GmailAuthenticator(tokens_dir=user_paths["tokens_dir"])
 
 st.session_state.config_mgr = config_mgr
 st.session_state.audit_logger = audit_logger
@@ -134,7 +217,7 @@ if "selected_mids" not in st.session_state:
 if "active_account" not in st.session_state:
     st.session_state.active_account = None
 
-# Retrieve Connected Accounts
+# Retrieve Connected Accounts for this specific user
 connected_accounts = auth.list_accounts()
 account_emails = [a["email"] for a in connected_accounts]
 
@@ -147,13 +230,24 @@ else:
 active_account_email = st.session_state.active_account
 active_account_info = next((a for a in connected_accounts if a["email"] == active_account_email), None)
 
-# Sidebar: Multi-Account Switcher & Quick Navigation
+# Sidebar: Multi-Account Switcher & User Profile
 with st.sidebar:
     st.title("🛡️ Mail Guard")
-    st.caption("Multi-Account Gmail Cleaner & Spam Deleter")
+    col_u1, col_u2 = st.columns([2.2, 1])
+    with col_u1:
+        st.markdown(f"👤 **{current_user['username']}**")
+    with col_u2:
+        if st.button("🚪 Logout", key="btn_user_logout", use_container_width=True):
+            st.session_state.current_user = None
+            st.session_state.active_account = None
+            st.session_state.scan_results = []
+            st.session_state.selected_mids = set()
+            st.rerun()
+
+    st.caption("Multi-User Gmail Cleaner & Spam Deleter")
     st.divider()
 
-    st.subheader("📬 Connected Accounts")
+    st.subheader(f"📬 {current_user['username']}'s Mailboxes")
     if connected_accounts:
         selected_email = st.selectbox(
             "Active Mailbox",
