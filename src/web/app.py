@@ -226,27 +226,71 @@ with tab_scan:
     else:
         st.header(f"🔍 Scan Mailbox: `{active_account_email}`")
 
-        col1, col2, col3 = st.columns([2, 1, 1])
+        ALL_CATEGORIES = [
+            "📥 Primary / Inbox",
+            "🏷️ Promotions",
+            "📢 Updates",
+            "👥 Social",
+            "💬 Forums",
+            "🛍️ Purchases",
+            "🚨 Spam",
+            "⭐ Starred",
+            "🏷️ Important",
+            "📤 Sent Mail",
+            "📝 Drafts",
+            "🗑️ Trash",
+            "📬 All Mail",
+        ]
+
+        DEFAULT_CATEGORIES = [
+            "🏷️ Promotions",
+            "🚨 Spam",
+            "📢 Updates",
+            "👥 Social",
+            "💬 Forums",
+        ]
+
+        if "selected_folders" not in st.session_state:
+            st.session_state.selected_folders = DEFAULT_CATEGORIES.copy()
+
+        # Select All controls placed right on top
+        col_hdr, col_all, col_none = st.columns([3, 1, 1])
+        with col_hdr:
+            st.markdown("##### 📂 Gmail Categories & Folders to Scan")
+        with col_all:
+            if st.button("✅ Select All (13)", key="btn_all_cats", use_container_width=True):
+                st.session_state.selected_folders = ALL_CATEGORIES.copy()
+                st.rerun()
+        with col_none:
+            if st.button("❌ Clear All", key="btn_clear_cats", use_container_width=True):
+                st.session_state.selected_folders = []
+                st.rerun()
+
+        col1, col2, col3 = st.columns([2.5, 1, 1.2])
         with col1:
             folders_to_scan = st.multiselect(
                 "Select Folders / Labels to Scan",
-                options=["INBOX", "SPAM", "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES"],
-                default=["SPAM", "CATEGORY_PROMOTIONS"],
-                help="Choose which Gmail categories or folders to search."
+                options=ALL_CATEGORIES,
+                default=st.session_state.selected_folders,
+                help="Choose which Gmail categories or folders to search.",
+                label_visibility="collapsed",
             )
+            st.session_state.selected_folders = folders_to_scan
+
         with col2:
             max_emails = st.number_input(
                 "Max Emails to Fetch",
                 min_value=10,
-                max_value=300,
+                max_value=500,
                 value=50,
-                step=10,
+                step=25,
+                help="Total maximum emails to fetch across the selected categories."
             )
         with col3:
             custom_query = st.text_input(
                 "Optional Filter",
                 placeholder="e.g. is:unread",
-                help="Optional filter (e.g. is:unread)."
+                help="Optional Gmail search filter (e.g. is:unread, older_than:30d)."
             )
 
         btn_scan = st.button(f"▶️ Run Dry-Run Scan on {active_account_email}", type="primary")
@@ -261,11 +305,12 @@ with tab_scan:
                 all_mids = []
                 with st.spinner(f"Fetching message IDs from {active_account_email}..."):
                     if folders_to_scan:
+                        per_folder_limit = max(10, max_emails // len(folders_to_scan) + 5) if len(folders_to_scan) > 1 else max_emails
                         for label in folders_to_scan:
                             mids = connector.list_message_ids(
                                 query=custom_query or None,
                                 label_ids=[label],
-                                max_results=max_emails,
+                                max_results=per_folder_limit,
                             )
                             all_mids.extend(mids)
                     else:

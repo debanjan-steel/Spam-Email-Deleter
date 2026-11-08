@@ -2,6 +2,7 @@
 """
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 from typing import Any, Dict, List, Optional
 import email.utils
 
@@ -46,6 +47,24 @@ class GmailConnector:
         except Exception:
             return None
 
+    API_CATEGORY_MAP = {
+        "primary": {"label": "INBOX", "q": "category:primary in:inbox"},
+        "inbox": {"label": "INBOX", "q": None},
+        "promotions": {"label": "CATEGORY_PROMOTIONS", "q": None},
+        "updates": {"label": "CATEGORY_UPDATES", "q": None},
+        "social": {"label": "CATEGORY_SOCIAL", "q": None},
+        "forums": {"label": "CATEGORY_FORUMS", "q": None},
+        "purchases": {"label": None, "q": "category:purchases OR label:purchases"},
+        "spam": {"label": "SPAM", "q": None},
+        "trash": {"label": "TRASH", "q": None},
+        "important": {"label": "IMPORTANT", "q": None},
+        "starred": {"label": "STARRED", "q": None},
+        "sent": {"label": "SENT", "q": None},
+        "draft": {"label": "DRAFT", "q": None},
+        "all mail": {"label": None, "q": None},
+        "all": {"label": None, "q": None},
+    }
+
     def list_message_ids(
         self,
         query: Optional[str] = None,
@@ -57,10 +76,31 @@ class GmailConnector:
             "userId": "me",
             "maxResults": min(max_results, 500),
         }
+        
+        q_parts = []
         if query:
-            params["q"] = query
+            q_parts.append(f"({query})")
+
         if label_ids:
-            params["labelIds"] = label_ids
+            resolved_labels = []
+            for lbl in label_ids:
+                clean = re.sub(r"[^\w\s]", "", lbl).strip().lower()
+                matched = False
+                for k, v in self.API_CATEGORY_MAP.items():
+                    if k in clean:
+                        if v["label"]:
+                            resolved_labels.append(v["label"])
+                        if v["q"]:
+                            q_parts.append(f"({v['q']})")
+                        matched = True
+                        break
+                if not matched and lbl:
+                    resolved_labels.append(lbl)
+            if resolved_labels:
+                params["labelIds"] = resolved_labels
+
+        if q_parts:
+            params["q"] = " ".join(q_parts)
 
         result = self.service.users().messages().list(**params).execute()
         messages = result.get("messages", [])

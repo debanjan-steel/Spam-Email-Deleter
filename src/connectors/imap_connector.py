@@ -17,12 +17,30 @@ class GmailImapConnector:
     GMAIL_IMAP_HOST = "imap.gmail.com"
     GMAIL_IMAP_PORT = 993
 
+    CATEGORY_MAP = {
+        "primary": {"folder": "INBOX", "raw": "category:primary in:inbox"},
+        "inbox": {"folder": "INBOX", "raw": "in:inbox"},
+        "promotions": {"folder": "[Gmail]/All Mail", "raw": "category:promotions"},
+        "updates": {"folder": "[Gmail]/All Mail", "raw": "category:updates"},
+        "social": {"folder": "[Gmail]/All Mail", "raw": "category:social"},
+        "forums": {"folder": "[Gmail]/All Mail", "raw": "category:forums"},
+        "purchases": {"folder": "[Gmail]/All Mail", "raw": "category:purchases OR label:purchases OR purchases"},
+        "spam": {"folder": "[Gmail]/Spam", "raw": "in:spam"},
+        "trash": {"folder": "[Gmail]/Trash", "raw": "in:trash"},
+        "important": {"folder": "[Gmail]/Important", "raw": "is:important"},
+        "starred": {"folder": "[Gmail]/Starred", "raw": "is:starred"},
+        "sent": {"folder": "[Gmail]/Sent Mail", "raw": "in:sent"},
+        "draft": {"folder": "[Gmail]/Drafts", "raw": "in:draft"},
+        "all mail": {"folder": "[Gmail]/All Mail", "raw": None},
+        "all": {"folder": "[Gmail]/All Mail", "raw": None},
+    }
+
     FOLDER_MAP = {
         "INBOX": "INBOX",
         "SPAM": "[Gmail]/Spam",
         "TRASH": "[Gmail]/Trash",
-        "CATEGORY_PROMOTIONS": "INBOX",
-        "CATEGORY_UPDATES": "INBOX",
+        "CATEGORY_PROMOTIONS": "[Gmail]/All Mail",
+        "CATEGORY_UPDATES": "[Gmail]/All Mail",
     }
 
     def __init__(self, email_address: str, app_password: str):
@@ -79,6 +97,16 @@ class GmailImapConnector:
         except Exception:
             return None
 
+    def _resolve_category_config(self, label: str) -> Dict[str, Any]:
+        """Resolves any label name (with emojis, friendly text, or raw keys) to IMAP search config."""
+        clean = re.sub(r"[^\w\s]", "", label).strip().lower()
+        for key, cfg in self.CATEGORY_MAP.items():
+            if key in clean:
+                return cfg
+        if label.upper() in self.FOLDER_MAP:
+            return {"folder": self.FOLDER_MAP[label.upper()], "raw": None}
+        return {"folder": "INBOX", "raw": None}
+
     def list_message_ids(
         self,
         query: Optional[str] = None,
@@ -86,26 +114,54 @@ class GmailImapConnector:
         max_results: int = 50,
     ) -> List[str]:
         """Retrieves a list of IMAP sequence IDs matching the folder or search criteria."""
-        folder = "INBOX"
-        if label_ids and label_ids[0] in self.FOLDER_MAP:
-            folder = self.FOLDER_MAP[label_ids[0]]
+        label_name = label_ids[0] if label_ids else "INBOX"
+        cfg = self._resolve_category_config(label_name)
+        target_folder = cfg["folder"]
 
         mail = self._get_connection()
         try:
-            mail.select(f'"{folder}"', readonly=True)
-            search_criterion = "ALL"
-            if query and "unread" in query.lower():
-                search_criterion = "UNSEEN"
+            # Select target folder with safe fallback to INBOX
+            try:
+                status, _ = mail.select(f'"{target_folder}"', readonly=True)
+            except Exception:
+                status = "NO"
+            if status != "OK":
+                target_folder = "INBOX"
+                mail.select(f'"{target_folder}"', readonly=True)
 
-            status, data = mail.search(None, search_criterion)
-            if status != "OK" or not data[0]:
+            raw_q = cfg.get("raw")
+            if raw_q and query:
+                full_raw = f"({raw_q}) {query}"
+            elif raw_q:
+                full_raw = raw_q
+            elif query:
+                full_raw = query
+            else:
+                full_raw = None
+
+            search_success = False
+            data = None
+            if full_raw:
+                try:
+                    s_status, s_data = mail.search(None, "X-GM-RAW", f'"{full_raw}"')
+                    if s_status == "OK" and s_data and s_data[0]:
+                        data = s_data
+                        search_success = True
+                except Exception:
+                    search_success = False
+
+            if not search_success:
+                search_criterion = "UNSEEN" if query and "unread" in query.lower() else "ALL"
+                status, data = mail.search(None, search_criterion)
+
+            if not data or not data[0]:
                 return []
 
             # Get message IDs (newest first)
             id_list = data[0].split()
             id_list.reverse()
             # Store ID with folder context, e.g. "INBOX:123"
-            return [f"{folder}:{mid.decode()}" for mid in id_list[:max_results]]
+            return [f"{target_folder}:{mid.decode()}" for mid in id_list[:max_results]]
         finally:
             try:
                 mail.logout()
@@ -211,12 +267,24 @@ class GmailImapConnector:
 
         mail = self._get_connection()
         try:
-            mail.select(f'"{folder}"')
-            trash_folder = "[Gmail]/Trash"
+            try:
+                mail.select(f'"{folder}"')
+            except Exception:
+                mail.select('"INBOX"')
 
-            # Copy to Trash
-            copy_status, _ = mail.copy(mid, f'"{trash_folder}"')
-            if copy_status == "OK":
+            # Try standard trash folder names
+            trash_folders = ["[Gmail]/Trash", "[Google Mail]/Trash", "[Gmail]/Bin", "Trash", "Bin"]
+            copy_ok = False
+            for tf in trash_folders:
+                try:
+                    copy_status, _ = mail.copy(mid, f'"{tf}"')
+                    if copy_status == "OK":
+                        copy_ok = True
+                        break
+                except Exception:
+                    continue
+
+            if copy_ok:
                 # Mark original as deleted and expunge
                 mail.store(mid, "+FLAGS", "\\Deleted")
                 mail.expunge()
