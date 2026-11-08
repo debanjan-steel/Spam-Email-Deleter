@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import uuid
 
-# Ensure repository root is in sys.path regardless of execution environment (Streamlit Cloud, Docker, Local)
+# Ensure repository root is in sys.path
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
@@ -29,6 +29,20 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+def get_current_redirect_uri() -> str:
+    """Detects whether running locally or on Streamlit Cloud to set OAuth redirect URI."""
+    if hasattr(st, "secrets") and "app_url" in st.secrets:
+        return str(st.secrets["app_url"]).rstrip("/")
+    try:
+        host = st.context.headers.get("host", "")
+        if "localhost" in host or "127.0.0.1" in host:
+            return "http://localhost:8501"
+        if host:
+            return f"https://{host}"
+    except Exception:
+        pass
+    return "https://spam-email-deleter.streamlit.app"
 
 # Inject PWA Manifest & Service Worker for 1-Click App Installation on Mobile & Desktop
 pwa_header_html = """
@@ -67,15 +81,12 @@ config_mgr: ConfigManager = st.session_state.config_mgr
 audit_logger: AuditLogger = st.session_state.audit_logger
 auth: GmailAuthenticator = st.session_state.auth
 
-# -------------------------------------------------------------
 # Handle Web/Mobile OAuth Redirect Callback
-# -------------------------------------------------------------
 query_params = st.query_params
 if "code" in query_params:
     auth_code = query_params["code"]
     try:
-        # Determine redirect URI matching browser address
-        redirect_uri = "http://localhost:8501"
+        redirect_uri = get_current_redirect_uri()
         newly_connected = auth.exchange_code(auth_code, redirect_uri=redirect_uri)
         st.session_state.active_account = newly_connected
         st.query_params.clear()
@@ -105,8 +116,8 @@ with st.sidebar:
     st.divider()
 
     if not auth.has_credentials_file():
-        st.error("Missing `credentials.json`")
-        st.info("Place your Google Cloud OAuth Client credentials.json in the project root or upload via the Setup tab.")
+        st.error("Missing Google Credentials")
+        st.info("Paste your credentials in Streamlit Secrets or upload them via the Setup tab.")
     else:
         st.subheader("📬 Connected Accounts")
         if connected_accounts:
@@ -129,16 +140,12 @@ with st.sidebar:
 
             col_add, col_del = st.columns([1, 1])
             with col_add:
-                if st.button("➕ Add Account", use_container_width=True):
-                    try:
-                        with st.spinner("Opening browser to authorize another Gmail account..."):
-                            new_email = auth.add_account_interactive()
-                        st.success(f"Connected `{new_email}`!")
-                        st.session_state.active_account = new_email
-                        st.session_state.scan_results = []
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to add account: {e}")
+                try:
+                    auth_url, _ = auth.get_authorization_url(redirect_uri=get_current_redirect_uri())
+                    st.link_button("➕ Add Account", auth_url, use_container_width=True)
+                except Exception as e:
+                    if st.button("➕ Add Account", use_container_width=True):
+                        st.error(f"Error: {e}")
             with col_del:
                 if st.button("🗑️ Disconnect", use_container_width=True):
                     auth.remove_account(active_account_email)
@@ -147,16 +154,12 @@ with st.sidebar:
                     st.session_state.scan_results = []
                     st.rerun()
         else:
-            st.warning("No Gmail accounts connected.")
-            if st.button("🔑 Connect First Gmail Account", type="primary", use_container_width=True):
-                try:
-                    with st.spinner("Opening browser for Google OAuth sign-in..."):
-                        first_email = auth.add_account_interactive()
-                    st.success(f"Connected `{first_email}`!")
-                    st.session_state.active_account = first_email
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Authentication failed: {e}")
+            st.warning("No Gmail accounts connected yet.")
+            try:
+                auth_url, _ = auth.get_authorization_url(redirect_uri=get_current_redirect_uri())
+                st.link_button("🔑 Connect First Gmail Account", auth_url, type="primary", use_container_width=True)
+            except Exception as e:
+                st.error(f"Could not generate sign-in link: {e}")
 
     st.divider()
     st.markdown("### Safety Guarantee")
@@ -582,47 +585,11 @@ with tab_audit:
 # TAB 5: PHONE & CLOUD 24/7 SETUP
 # -------------------------------------------------------------
 with tab_cloud:
-    st.header("☁️ Run 24/7 in the Cloud (Access From Your Phone Anytime)")
+    st.header("☁️ Cloud Credentials & Phone Setup")
+
     st.markdown("""
-    To access this app from your **phone 24/7 with your laptop completely turned off**, deploy it to one of these free cloud hosting platforms:
-    """)
-
-    col_h1, col_h2 = st.columns(2)
-    with col_h1:
-        st.subheader("Option A: Streamlit Community Cloud (Recommended & 100% Free)")
-        st.markdown("""
-        **Zero-cost, permanent cloud hosting designed specifically for Streamlit apps.**
-        1. Push this project folder to your personal **GitHub** repository.
-        2. Go to **[share.streamlit.io](https://share.streamlit.io/)** and sign in with GitHub.
-        3. Click **New app** > Select your repository:
-           - Main file path: `src/web/app.py`
-        4. Click **Deploy!**
-        5. You will get a permanent public HTTPS URL (e.g., `https://yourname-spam-deleter.streamlit.app`).
-        6. Open that link on your phone in **Safari** or **Chrome** > tap **Share / Menu** > **Add to Home Screen**.
-        7. It now opens on your phone anytime like a native app — even with your laptop shut down!
-        """)
-
-    with col_h2:
-        st.subheader("Option B: Render.com (Free Web Service)")
-        st.markdown("""
-        **Alternative free cloud host using Docker or Python.**
-        1. Push this project to GitHub.
-        2. Go to **[render.com](https://render.com)** > click **New +** > **Web Service**.
-        3. Connect your repository (Render automatically reads the included `render.yaml` or `Dockerfile`).
-        4. Click **Create Web Service**.
-        5. You get a live 24/7 link: `https://spam-deleter-xxxx.onrender.com`.
-        """)
-
-    st.divider()
-
-    st.subheader("🔑 Google OAuth Configuration for Cloud & Mobile")
-    st.markdown("""
-    When running in the cloud, Google requires that your public URL is listed as an authorized redirect URI:
-    1. Go to [Google Cloud Console](https://console.cloud.google.com/) > **APIs & Services** > **Credentials**.
-    2. Edit your OAuth 2.0 Client:
-       - Set Application Type to **Web application** (or add URIs).
-       - Under **Authorized redirect URIs**, add your cloud URL (e.g. `https://your-app.streamlit.app` or `https://your-app.onrender.com`).
-    3. Download the updated `credentials.json` and upload it below.
+    ### 🔒 Secure Credentials Setup via Streamlit Secrets
+    Because this GitHub repository is public, storing credentials in **Streamlit Secrets** is the safest method.
     """)
 
     uploaded = st.file_uploader("Upload Google Cloud credentials.json", type=["json"])

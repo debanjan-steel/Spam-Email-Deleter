@@ -1,7 +1,8 @@
-"""Google OAuth 2.0 Authenticator supporting Web Redirect & Multiple Gmail Accounts.
-Supports cloud deployment (Render, Streamlit Cloud, etc.) and mobile PWA usage.
+"""Google OAuth 2.0 Authenticator supporting Web Redirect, Streamlit Secrets, and Multiple Gmail Accounts.
+Supports cloud deployment (Streamlit Cloud, Render) and mobile PWA usage.
 """
 from pathlib import Path
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -53,9 +54,47 @@ class GmailAuthenticator:
             except Exception:
                 pass
 
+    def get_client_config(self) -> Optional[Dict[str, Any]]:
+        """Retrieves Google OAuth client config from file or Streamlit secrets."""
+        # 1. From local file
+        if self.credentials_file.exists():
+            try:
+                with open(self.credentials_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._ensure_redirect_uris(data)
+                    return data
+            except Exception:
+                pass
+
+        # 2. From Streamlit secrets (for secure cloud deployment)
+        try:
+            import streamlit as st
+            if "gcp_oauth" in st.secrets:
+                data = json.loads(json.dumps(st.secrets["gcp_oauth"]))
+                self._ensure_redirect_uris(data)
+                return data
+            if "web" in st.secrets:
+                data = {"web": json.loads(json.dumps(st.secrets["web"]))}
+                self._ensure_redirect_uris(data)
+                return data
+        except Exception:
+            pass
+
+        return None
+
+    def _ensure_redirect_uris(self, data: Dict[str, Any]) -> None:
+        """Ensures redirect_uris key exists in client config."""
+        key = "web" if "web" in data else ("installed" if "installed" in data else None)
+        if key:
+            if "redirect_uris" not in data[key]:
+                data[key]["redirect_uris"] = [
+                    "https://spam-email-deleter.streamlit.app",
+                    "http://localhost:8501"
+                ]
+
     def has_credentials_file(self) -> bool:
-        """Checks if Google OAuth credentials.json exists."""
-        return self.credentials_file.exists()
+        """Checks if Google OAuth credentials exist via file or secrets."""
+        return self.get_client_config() is not None
 
     def list_accounts(self) -> List[Dict[str, Any]]:
         """Lists all connected Gmail accounts and their basic stats."""
@@ -91,14 +130,15 @@ class GmailAuthenticator:
         Returns:
             (auth_url, state)
         """
-        if not self.credentials_file.exists():
+        config = self.get_client_config()
+        if not config:
             raise FileNotFoundError(
-                f"Missing '{self.credentials_file.name}'. "
-                "Please place credentials.json in project root or upload via the Setup tab."
+                "Missing Google OAuth credentials. Place credentials.json in project root "
+                "or add gcp_oauth to Streamlit Secrets."
             )
 
-        flow = Flow.from_client_secrets_file(
-            str(self.credentials_file),
+        flow = Flow.from_client_config(
+            config,
             scopes=SCOPES,
             redirect_uri=redirect_uri,
         )
@@ -115,8 +155,12 @@ class GmailAuthenticator:
         Returns:
             Authenticated email address.
         """
-        flow = Flow.from_client_secrets_file(
-            str(self.credentials_file),
+        config = self.get_client_config()
+        if not config:
+            raise FileNotFoundError("Missing Google OAuth credentials.")
+
+        flow = Flow.from_client_config(
+            config,
             scopes=SCOPES,
             redirect_uri=redirect_uri,
         )
@@ -129,33 +173,6 @@ class GmailAuthenticator:
 
         if not email:
             raise ValueError("Could not retrieve email profile for authorized account.")
-
-        filename = f"{self._sanitize_email_for_filename(email)}.json"
-        target_path = self.tokens_dir / filename
-        with open(target_path, "w", encoding="utf-8") as f:
-            f.write(creds.to_json())
-
-        return email
-
-    def add_account_interactive(self) -> str:
-        """Desktop loopback fallback."""
-        if not self.credentials_file.exists():
-            raise FileNotFoundError(
-                f"Missing '{self.credentials_file.name}'. "
-                "Please place credentials.json in project root."
-            )
-
-        flow = InstalledAppFlow.from_client_secrets_file(
-            str(self.credentials_file), SCOPES
-        )
-        creds = flow.run_local_server(port=0, prompt="consent")
-
-        service = build("gmail", "v1", credentials=creds)
-        profile = service.users().getProfile(userId="me").execute()
-        email = profile.get("emailAddress")
-
-        if not email:
-            raise ValueError("Could not retrieve email profile.")
 
         filename = f"{self._sanitize_email_for_filename(email)}.json"
         target_path = self.tokens_dir / filename
