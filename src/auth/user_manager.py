@@ -165,3 +165,4 @@ class UserManager:
             "config_dir": user_root / "config",
             "audit_db": user_root / "audit_log.db",
         }
+

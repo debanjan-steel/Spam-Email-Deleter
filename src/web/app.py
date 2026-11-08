@@ -144,7 +144,7 @@ if not st.session_state.current_user:
             st.subheader("Sign In to Your Account")
             st.caption("Access your private Gmail accounts and spam deletion rules.")
             with st.form("login_form", clear_on_submit=False):
-                login_user = st.text_input("Username", placeholder="e.g. debanjan or user1", key="login_username_input")
+                login_user = st.text_input("Username", placeholder="e.g. user1 or alex_d", key="login_username_input")
                 login_pass = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pass_input")
                 btn_login = st.form_submit_button("🚀 Sign In", type="primary", use_container_width=True)
 
@@ -164,7 +164,7 @@ if not st.session_state.current_user:
             st.subheader("Create a New Account")
             st.caption("Each account gets a dedicated, 100% private sandbox for unlimited Gmail accounts.")
             with st.form("register_form", clear_on_submit=False):
-                reg_user = st.text_input("Choose Username", placeholder="e.g. debanjan or user1", key="reg_username_input")
+                reg_user = st.text_input("Choose Username", placeholder="e.g. user1 or alex_d", key="reg_username_input")
                 reg_pass = st.text_input("Choose Password", type="password", placeholder="At least 6 characters", key="reg_pass_input")
                 reg_confirm = st.text_input("Confirm Password", type="password", placeholder="Re-type your password", key="reg_confirm_input")
                 btn_register = st.form_submit_button("✨ Create Account", type="primary", use_container_width=True)
