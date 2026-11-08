@@ -1,41 +1,60 @@
 """User Management and Authentication System for Multi-Tenant Gmail Spam Deleter.
-Handles secure account creation, password hashing with PBKDF2-HMAC-SHA256,
-and complete per-user filesystem isolation.
+Handles secure Gmail-based registration, password encryption with Fernet for exact retrieval,
+outbound email password recovery, password updating, account deletion,
+and complete per-user sandbox isolation.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import hashlib
-import hmac
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import os
 from pathlib import Path
 import re
-import secrets
 import shutil
+import smtplib
 import sqlite3
 from typing import Any, Dict, Generator, Optional, Tuple
 import uuid
 
+from cryptography.fernet import Fernet
+
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = WORKSPACE_ROOT / "data"
 USERS_DB_PATH = DATA_DIR / "users.db"
+SECRET_KEY_PATH = DATA_DIR / "secret.key"
 GLOBAL_CONFIG_DIR = WORKSPACE_ROOT / "config"
 
 class UserManager:
-    """Manages application users, password hashing, and user-isolated workspaces."""
+    """Manages application users, password encryption/recovery, and user-isolated workspaces."""
 
     def __init__(
         self,
         db_path: Path = USERS_DB_PATH,
         data_dir: Path = DATA_DIR,
+        secret_key_path: Path = SECRET_KEY_PATH,
         template_config_dir: Path = GLOBAL_CONFIG_DIR,
     ):
         self.db_path = db_path
         self.data_dir = data_dir
         self.users_dir = self.data_dir / "users"
+        self.secret_key_path = secret_key_path
         self.template_config_dir = template_config_dir
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.users_dir.mkdir(parents=True, exist_ok=True)
+        self.fernet = self._init_fernet()
         self._init_db()
+
+    def _init_fernet(self) -> Fernet:
+        """Initializes or loads persistent Fernet encryption key."""
+        if not self.secret_key_path.exists():
+            key = Fernet.generate_key()
+            with open(self.secret_key_path, "wb") as f:
+                f.write(key)
+        else:
+            with open(self.secret_key_path, "rb") as f:
+                key = f.read().strip()
+        return Fernet(key)
 
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -53,53 +72,52 @@ class UserManager:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS app_users (
                     id TEXT PRIMARY KEY,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    salt TEXT NOT NULL,
+                    gmail TEXT UNIQUE NOT NULL,
+                    password_encrypted TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
             """)
             conn.commit()
 
-    def _hash_password(self, password: str, salt: str) -> str:
-        """Derives a secure 256-bit PBKDF2-HMAC key from password and salt."""
-        dk = hashlib.pbkdf2_hmac(
-            "sha256",
-            password.encode("utf-8"),
-            salt.encode("utf-8"),
-            100_000,
-        )
-        return dk.hex()
+    def _encrypt_password(self, password: str) -> str:
+        """Encrypts password reversibly using Fernet."""
+        return self.fernet.encrypt(password.encode("utf-8")).decode("utf-8")
 
-    def create_user(self, username: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        """Registers a new user and sets up their isolated data directories.
+    def _decrypt_password(self, encrypted_password: str) -> str:
+        """Decrypts password back to exact plaintext using Fernet."""
+        return self.fernet.decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+
+    def _validate_gmail(self, gmail: str) -> bool:
+        """Checks if input is a plausible Gmail address."""
+        clean = gmail.strip().lower()
+        return "@" in clean and "." in clean and len(clean) >= 5
+
+    def create_user(self, gmail: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """Registers a new user with their Gmail and password.
         
         Returns:
             (success, message, user_dict)
         """
-        clean_username = username.strip().lower()
-        if len(clean_username) < 3:
-            return False, "Username must be at least 3 characters long.", None
-        if not re.match(r"^[a-zA-Z0-9_\-\.@]+$", clean_username):
-            return False, "Username can only contain letters, numbers, dots, hyphens, and underscores.", None
+        clean_gmail = gmail.strip().lower()
+        if not self._validate_gmail(clean_gmail):
+            return False, "Please enter a valid Gmail address (e.g. yourname@gmail.com).", None
         if len(password) < 6:
             return False, "Password must be at least 6 characters long.", None
 
         user_id = uuid.uuid4().hex
-        salt = secrets.token_hex(16)
-        pwd_hash = self._hash_password(password, salt)
+        pwd_encrypted = self._encrypt_password(password)
         created_at = datetime.now(timezone.utc).isoformat()
 
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT INTO app_users (id, username, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, clean_username, pwd_hash, salt, created_at),
+                    "INSERT INTO app_users (id, gmail, password_encrypted, created_at) VALUES (?, ?, ?, ?)",
+                    (user_id, clean_gmail, pwd_encrypted, created_at),
                 )
                 conn.commit()
         except sqlite3.IntegrityError:
-            return False, f"Username '{clean_username}' already exists. Please sign in instead.", None
+            return False, f"An account with '{clean_gmail}' already exists. Please sign in instead.", None
         except Exception as e:
             return False, f"Failed to create account: {e}", None
 
@@ -117,44 +135,189 @@ class UserManager:
 
         user_info = {
             "id": user_id,
-            "username": clean_username,
+            "gmail": clean_gmail,
             "created_at": created_at,
         }
-        return True, f"Account '{clean_username}' created successfully!", user_info
+        return True, f"Account '{clean_gmail}' created successfully!", user_info
 
-    def authenticate(self, username: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    def authenticate(self, gmail: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Authenticates user credentials.
         
         Returns:
             (success, message, user_dict)
         """
-        clean_username = username.strip().lower()
-        if not clean_username or not password:
-            return False, "Please enter both username and password.", None
+        clean_gmail = gmail.strip().lower()
+        if not clean_gmail or not password:
+            return False, "Please enter both Gmail address and password.", None
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, username, password_hash, salt, created_at FROM app_users WHERE username = ?",
-                (clean_username,),
+                "SELECT id, gmail, password_encrypted, created_at FROM app_users WHERE gmail = ?",
+                (clean_gmail,),
             )
             row = cursor.fetchone()
 
         if not row:
-            return False, "Invalid username or password.", None
+            return False, "Invalid Gmail address or password.", None
 
-        expected_hash = row["password_hash"]
-        computed_hash = self._hash_password(password, row["salt"])
+        try:
+            stored_password = self._decrypt_password(row["password_encrypted"])
+        except Exception:
+            return False, "Could not decrypt account password. Please contact support.", None
 
-        if not hmac.compare_digest(expected_hash, computed_hash):
-            return False, "Invalid username or password.", None
+        if stored_password != password:
+            return False, "Invalid Gmail address or password.", None
 
         user_info = {
             "id": row["id"],
-            "username": row["username"],
+            "gmail": row["gmail"],
             "created_at": row["created_at"],
         }
-        return True, f"Welcome back, {row['username']}!", user_info
+        return True, f"Welcome back, {row['gmail']}!", user_info
+
+    def recover_password(self, gmail: str) -> Tuple[bool, str, Optional[str]]:
+        """Retrieves user's exact password and sends an email to their Gmail address.
+        
+        Returns:
+            (success, message, exact_password)
+        """
+        clean_gmail = gmail.strip().lower()
+        if not self._validate_gmail(clean_gmail):
+            return False, "Please enter a valid Gmail address.", None
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, gmail, password_encrypted FROM app_users WHERE gmail = ?",
+                (clean_gmail,),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return False, f"No account found with Gmail address '{clean_gmail}'.", None
+
+        try:
+            exact_password = self._decrypt_password(row["password_encrypted"])
+        except Exception as e:
+            return False, f"Error decrypting account password: {e}", None
+
+        # Dispatch email
+        email_sent, email_msg = self.send_recovery_email(clean_gmail, exact_password)
+        return True, email_msg, exact_password
+
+    def send_recovery_email(self, recipient_email: str, retrieved_password: str) -> Tuple[bool, str]:
+        """Sends an email with the user's exact password using SMTP or provides safe fallback."""
+        smtp_sender = None
+        smtp_pass = None
+        smtp_host = "smtp.gmail.com"
+        smtp_port = 465
+
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets"):
+                smtp_sender = st.secrets.get("smtp_email") or st.secrets.get("SMTP_EMAIL")
+                smtp_pass = st.secrets.get("smtp_password") or st.secrets.get("SMTP_PASSWORD")
+                smtp_host = st.secrets.get("smtp_host", smtp_host)
+                smtp_port = int(st.secrets.get("smtp_port", smtp_port))
+        except Exception:
+            pass
+
+        if not smtp_sender or not smtp_pass:
+            smtp_sender = os.environ.get("SMTP_EMAIL")
+            smtp_pass = os.environ.get("SMTP_PASSWORD")
+
+        if smtp_sender and smtp_pass:
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = "Your Spam Email Deleter Account Password"
+                msg["From"] = f"Spam Deleter Guard <{smtp_sender}>"
+                msg["To"] = recipient_email
+
+                body_text = f"""Hello,
+
+You requested password recovery for your Spam Email Deleter account ({recipient_email}).
+
+Here is your exact account password:
+======================================
+{retrieved_password}
+======================================
+
+You can now sign in at: https://spam-email-deleter.streamlit.app
+
+Best regards,
+Spam Email Deleter Guard Team
+"""
+                msg.attach(MIMEText(body_text, "plain"))
+                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10) as server:
+                    server.login(smtp_sender, smtp_pass)
+                    server.sendmail(smtp_sender, [recipient_email], msg.as_string())
+                return True, f"We have sent an email with your exact password to {recipient_email}!"
+            except Exception as e:
+                return True, f"Your exact password is: **{retrieved_password}** (SMTP error: {e})"
+
+        # Fallback if system SMTP is not configured in secrets
+        return True, f"Your exact account password is: **{retrieved_password}**"
+
+    def change_password(self, user_id: str, old_password: str, new_password: str) -> Tuple[bool, str]:
+        """Changes user password after verifying old password.
+        
+        Returns:
+            (success, message)
+        """
+        if len(new_password) < 6:
+            return False, "New password must be at least 6 characters long."
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT password_encrypted FROM app_users WHERE id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return False, "User account not found."
+
+        try:
+            current_password = self._decrypt_password(row["password_encrypted"])
+        except Exception:
+            return False, "Failed to decrypt current password."
+
+        if current_password != old_password:
+            return False, "Incorrect old password. Please re-enter your current password."
+
+        new_encrypted = self._encrypt_password(new_password)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE app_users SET password_encrypted = ? WHERE id = ?",
+                (new_encrypted, user_id),
+            )
+            conn.commit()
+
+        return True, "Password updated successfully!"
+
+    def delete_user(self, user_id: str) -> Tuple[bool, str]:
+        """Permanently deletes the user account and purges their data directory.
+        
+        Returns:
+            (success, message)
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM app_users WHERE id = ?", (user_id,))
+            conn.commit()
+
+        # Purge user directory
+        user_paths = self.get_user_paths(user_id)
+        if user_paths["user_dir"].exists():
+            try:
+                shutil.rmtree(user_paths["user_dir"], ignore_errors=True)
+            except Exception:
+                pass
+
+        return True, "Your account and all associated data have been permanently deleted."
 
     def get_user_paths(self, user_id: str) -> Dict[str, Path]:
         """Returns the isolated directory and file paths for a specific user."""
@@ -165,4 +328,3 @@ class UserManager:
             "config_dir": user_root / "config",
             "audit_db": user_root / "audit_log.db",
         }
-

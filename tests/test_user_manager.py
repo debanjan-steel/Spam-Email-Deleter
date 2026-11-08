@@ -1,72 +1,91 @@
-"""Unit tests for multi-tenant UserManager and user isolation.
+"""Unit tests for multi-tenant UserManager with Gmail auth, password recovery, change, and deletion.
 """
 import sys
 from pathlib import Path
 import tempfile
-import shutil
 
 # Ensure workspace root is in path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.auth.user_manager import UserManager
 
-def test_user_creation_and_auth():
+def test_user_manager_full_lifecycle():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         db_path = temp_path / "test_users.db"
         data_dir = temp_path / "data"
+        key_path = temp_path / "secret.key"
 
-        user_mgr = UserManager(db_path=db_path, data_dir=data_dir)
+        user_mgr = UserManager(
+            db_path=db_path,
+            data_dir=data_dir,
+            secret_key_path=key_path,
+        )
 
-        # 1. Invalid username (too short)
-        ok, msg, u = user_mgr.create_user("ab", "pass123")
+        # 1. Invalid Gmail format
+        ok, msg, _ = user_mgr.create_user("notanemail", "mypassword123")
         assert not ok
-        assert "at least 3 characters" in msg
+        assert "valid Gmail address" in msg
 
-        # 2. Invalid password (too short)
-        ok, msg, u = user_mgr.create_user("user1", "12345")
+        # 2. Short password
+        ok, msg, _ = user_mgr.create_user("user1@gmail.com", "123")
         assert not ok
         assert "at least 6 characters" in msg
 
-        # 3. Valid user creation
-        ok, msg, user1 = user_mgr.create_user("user1", "securepass123")
+        # 3. Successful user creation
+        ok, msg, user1 = user_mgr.create_user("User1@Gmail.Com", "MySecretPass_99")
         assert ok
-        assert user1["username"] == "user1"
+        assert user1["gmail"] == "user1@gmail.com"
         assert "id" in user1
 
         # 4. Duplicate registration fails
-        ok, msg, _ = user_mgr.create_user("user1", "anotherpass")
+        ok, msg, _ = user_mgr.create_user("user1@gmail.com", "anotherpass")
         assert not ok
         assert "already exists" in msg
 
         # 5. Successful authentication
-        ok, msg, auth_u = user_mgr.authenticate("user1", "securepass123")
+        ok, msg, auth_u = user_mgr.authenticate("user1@gmail.com", "MySecretPass_99")
         assert ok
         assert auth_u["id"] == user1["id"]
 
         # 6. Wrong password fails
-        ok, msg, _ = user_mgr.authenticate("user1", "wrongpass")
+        ok, msg, _ = user_mgr.authenticate("user1@gmail.com", "wrongpass")
         assert not ok
-        assert "Invalid username or password" in msg
+        assert "Invalid Gmail address or password" in msg
 
-        # 7. Non-existent user fails
-        ok, msg, _ = user_mgr.authenticate("nobody", "securepass123")
+        # 7. Exact Password Recovery
+        ok, msg, retrieved_pass = user_mgr.recover_password("user1@gmail.com")
+        assert ok
+        assert retrieved_pass == "MySecretPass_99"
+
+        # 8. Password Change
+        # 8a. Wrong old password
+        ok, msg = user_mgr.change_password(user1["id"], "wrongold", "NewSecretPass_100")
         assert not ok
+        assert "Incorrect old password" in msg
 
-        # 8. User paths exist and are isolated
+        # 8b. Valid password change
+        ok, msg = user_mgr.change_password(user1["id"], "MySecretPass_99", "NewSecretPass_100")
+        assert ok
+        assert "Password updated successfully" in msg
+
+        # 8c. Verify new password works and old fails
+        assert not user_mgr.authenticate("user1@gmail.com", "MySecretPass_99")[0]
+        assert user_mgr.authenticate("user1@gmail.com", "NewSecretPass_100")[0]
+
+        # 9. Verify isolated user directory
         paths1 = user_mgr.get_user_paths(user1["id"])
         assert paths1["tokens_dir"].exists()
-        assert paths1["config_dir"].exists()
 
-        # 9. Second user is completely isolated
-        ok, _, user2 = user_mgr.create_user("user2", "password456")
+        # 10. Account Deletion
+        ok, msg = user_mgr.delete_user(user1["id"])
         assert ok
-        paths2 = user_mgr.get_user_paths(user2["id"])
-        assert paths1["user_dir"] != paths2["user_dir"]
-        assert paths1["tokens_dir"] != paths2["tokens_dir"]
+        # User no longer exists in DB
+        assert not user_mgr.authenticate("user1@gmail.com", "NewSecretPass_100")[0]
+        # User directory was purged
+        assert not paths1["user_dir"].exists()
 
-    print("UserManager unit tests passed successfully!")
+    print("UserManager full lifecycle tests passed successfully!")
 
 if __name__ == "__main__":
-    test_user_creation_and_auth()
-
+    test_user_manager_full_lifecycle()

@@ -11,6 +11,7 @@ google-auth-httplib2>=0.2.0
 # Configuration & Data Validation
 pyyaml>=6.0.2
 pydantic>=2.10.0
+cryptography>=42.0.0
 
 # Optional AI Reasoning
 google-genai>=1.0.0

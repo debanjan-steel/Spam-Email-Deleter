@@ -144,12 +144,12 @@ if not st.session_state.current_user:
             st.subheader("Sign In to Your Account")
             st.caption("Access your private Gmail accounts and spam deletion rules.")
             with st.form("login_form", clear_on_submit=False):
-                login_user = st.text_input("Username", placeholder="e.g. user1 or alex_d", key="login_username_input")
-                login_pass = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pass_input")
+                login_gmail = st.text_input("Gmail Address", placeholder="e.g. yourname@gmail.com", key="login_gmail_input")
+                login_pass = st.text_input("Password", type="password", placeholder="Enter your account password", key="login_pass_input")
                 btn_login = st.form_submit_button("🚀 Sign In", type="primary", use_container_width=True)
 
             if btn_login:
-                ok, msg, u_data = user_mgr.authenticate(login_user, login_pass)
+                ok, msg, u_data = user_mgr.authenticate(login_gmail, login_pass)
                 if ok:
                     st.session_state.current_user = u_data
                     st.session_state.active_account = None
@@ -160,12 +160,28 @@ if not st.session_state.current_user:
                 else:
                     st.error(msg)
 
+            # Forgot Password Recovery
+            with st.expander("❓ Forgot Password?", expanded=False):
+                st.markdown("Enter your registered Gmail address below. We'll send an email with your exact account password.")
+                rec_gmail = st.text_input("Recovery Gmail Address", placeholder="e.g. yourname@gmail.com", key="rec_gmail_input")
+                btn_recover = st.button("📬 Send Password to My Gmail", key="btn_send_recovery", use_container_width=True)
+                if btn_recover:
+                    if not rec_gmail:
+                        st.warning("Please enter your registered Gmail address.")
+                    else:
+                        with st.spinner(f"Retrieving password for {rec_gmail}..."):
+                            ok, msg, _ = user_mgr.recover_password(rec_gmail)
+                        if ok:
+                            st.success(f"🎉 {msg}")
+                        else:
+                            st.error(msg)
+
         with tab_register:
             st.subheader("Create a New Account")
             st.caption("Each account gets a dedicated, 100% private sandbox for unlimited Gmail accounts.")
             with st.form("register_form", clear_on_submit=False):
-                reg_user = st.text_input("Choose Username", placeholder="e.g. user1 or alex_d", key="reg_username_input")
-                reg_pass = st.text_input("Choose Password", type="password", placeholder="At least 6 characters", key="reg_pass_input")
+                reg_gmail = st.text_input("Gmail Address", placeholder="e.g. yourname@gmail.com", key="reg_gmail_input")
+                reg_pass = st.text_input("Password", type="password", placeholder="At least 6 characters", key="reg_pass_input")
                 reg_confirm = st.text_input("Confirm Password", type="password", placeholder="Re-type your password", key="reg_confirm_input")
                 btn_register = st.form_submit_button("✨ Create Account", type="primary", use_container_width=True)
 
@@ -173,7 +189,7 @@ if not st.session_state.current_user:
                 if reg_pass != reg_confirm:
                     st.error("Passwords do not match. Please verify your password.")
                 else:
-                    ok, msg, u_data = user_mgr.create_user(reg_user, reg_pass)
+                    ok, msg, u_data = user_mgr.create_user(reg_gmail, reg_pass)
                     if ok:
                         st.session_state.current_user = u_data
                         st.session_state.active_account = None
@@ -235,7 +251,7 @@ with st.sidebar:
     st.title("🛡️ Mail Guard")
     col_u1, col_u2 = st.columns([2.2, 1])
     with col_u1:
-        st.markdown(f"👤 **{current_user['username']}**")
+        st.markdown(f"👤 **{current_user.get('gmail', current_user.get('username', 'Account'))}**")
     with col_u2:
         if st.button("🚪 Logout", key="btn_user_logout", use_container_width=True):
             st.session_state.current_user = None
@@ -247,7 +263,7 @@ with st.sidebar:
     st.caption("Multi-User Gmail Cleaner & Spam Deleter")
     st.divider()
 
-    st.subheader(f"📬 {current_user['username']}'s Mailboxes")
+    st.subheader("📬 Connected Mailboxes")
     if connected_accounts:
         selected_email = st.selectbox(
             "Active Mailbox",
@@ -282,12 +298,13 @@ with st.sidebar:
     st.markdown("✅ **Mobile PWA**: Open on your phone in Safari/Chrome and tap **Add to Home Screen** to install as a native app.")
 
 # Main Application Tabs
-tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_policy = st.tabs([
+tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_settings, tab_policy = st.tabs([
     "🔍 Scan & Clean",
     "➕ Add Gmail Account",
     "🎯 Custom Deletion Rules",
     "🛡️ Whitelist & Safeguards",
     "↩️ Audit Log & Undo",
+    "⚙️ Settings",
     "📄 Privacy & Security Policy",
 ])
 
@@ -823,7 +840,75 @@ with tab_audit:
                     st.dataframe(e_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 6: PRIVACY & SECURITY POLICY
+# TAB 6: SETTINGS (CHANGE PASSWORD & DELETE ACCOUNT)
+# -------------------------------------------------------------
+with tab_settings:
+    st.header("⚙️ Account Settings")
+    user_gmail = current_user.get("gmail", current_user.get("username", "User"))
+    st.markdown(f"Manage credentials and security settings for **`{user_gmail}`**.")
+
+    st.divider()
+
+    st.subheader("🔑 Change Password")
+    st.caption("Update your Spam Deleter account password below.")
+    with st.form("change_password_form", clear_on_submit=True):
+        col_cp1, col_cp2, col_cp3 = st.columns(3)
+        with col_cp1:
+            old_pass = st.text_input("Type Old Password", type="password", key="cp_old_pass", placeholder="Current password")
+        with col_cp2:
+            new_pass = st.text_input("Type New Password", type="password", key="cp_new_pass", placeholder="At least 6 characters")
+        with col_cp3:
+            confirm_new_pass = st.text_input("Retype New Password", type="password", key="cp_confirm_pass", placeholder="Re-enter new password")
+
+        btn_change_pass = st.form_submit_button("💾 Update Password", type="primary", use_container_width=True)
+
+    if btn_change_pass:
+        if not old_pass or not new_pass or not confirm_new_pass:
+            st.warning("Please fill in all three password fields.")
+        elif new_pass != confirm_new_pass:
+            st.error("New passwords do not match. Please verify and retype.")
+        elif len(new_pass) < 6:
+            st.error("New password must be at least 6 characters long.")
+        else:
+            with st.spinner("Updating password..."):
+                ok, msg = user_mgr.change_password(current_user["id"], old_pass, new_pass)
+            if ok:
+                st.success(f"🎉 {msg}")
+            else:
+                st.error(msg)
+
+    st.divider()
+
+    st.subheader("🚨 Delete Your Account")
+    st.warning(
+        "⚠️ **Permanent Action**: Deleting your account will permanently wipe your account profile, "
+        "all saved Gmail connections and App Passwords, custom deletion rules, and audit logs. "
+        "This cannot be undone."
+    )
+
+    confirm_delete = st.checkbox(
+        "I understand that deleting my account is permanent and all my data will be immediately destroyed.",
+        key="confirm_account_deletion"
+    )
+
+    if st.button("🗑️ Delete My Account Permanently", type="secondary", use_container_width=True):
+        if not confirm_delete:
+            st.error("Please check the confirmation box above to proceed with account deletion.")
+        else:
+            with st.spinner("Deleting account and purging workspace..."):
+                ok, msg = user_mgr.delete_user(current_user["id"])
+            if ok:
+                st.session_state.current_user = None
+                st.session_state.active_account = None
+                st.session_state.scan_results = []
+                st.session_state.selected_mids = set()
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+# -------------------------------------------------------------
+# TAB 7: PRIVACY & SECURITY POLICY
 # -------------------------------------------------------------
 with tab_policy:
     st.header("📄 Privacy & Security Policy")
