@@ -69,12 +69,13 @@ class GmailAuthenticator:
         # 2. From Streamlit secrets (for secure cloud deployment)
         try:
             import streamlit as st
-            if "gcp_oauth" in st.secrets:
-                data = json.loads(json.dumps(st.secrets["gcp_oauth"]))
+            sec_dict = st.secrets.to_dict()
+            if "web" in sec_dict:
+                data = {"web": dict(sec_dict["web"])}
                 self._ensure_redirect_uris(data)
                 return data
-            if "web" in st.secrets:
-                data = {"web": json.loads(json.dumps(st.secrets["web"]))}
+            if "gcp_oauth" in sec_dict:
+                data = dict(sec_dict["gcp_oauth"])
                 self._ensure_redirect_uris(data)
                 return data
         except Exception:

@@ -3,6 +3,7 @@ Supports Progressive Web App (PWA) installation, Mobile/Cloud OAuth, and Multipl
 """
 import sys
 from datetime import datetime
+import json
 from pathlib import Path
 import uuid
 
@@ -116,8 +117,8 @@ with st.sidebar:
     st.divider()
 
     if not auth.has_credentials_file():
-        st.error("Missing Google Credentials")
-        st.info("Paste your credentials in Streamlit Secrets or upload them via the Setup tab.")
+        st.warning("⚠️ Credentials Required")
+        st.caption("Paste credentials in the main window to unlock.")
     else:
         st.subheader("📬 Connected Accounts")
         if connected_accounts:
@@ -154,7 +155,7 @@ with st.sidebar:
                     st.session_state.scan_results = []
                     st.rerun()
         else:
-            st.warning("No Gmail accounts connected yet.")
+            st.info("No Gmail accounts connected yet.")
             try:
                 auth_url, _ = auth.get_authorization_url(redirect_uri=get_current_redirect_uri())
                 st.link_button("🔑 Connect First Gmail Account", auth_url, type="primary", use_container_width=True)
@@ -173,15 +174,49 @@ tab_scan, tab_rules, tab_whitelist, tab_audit, tab_cloud = st.tabs([
     "🎯 Custom Deletion Rules",
     "🛡️ Whitelist & Safeguards",
     "↩️ Audit Log & Undo",
-    "☁️ Phone & Cloud 24/7 Setup",
+    "☁️ Cloud Credentials & Phone Setup",
 ])
 
 # -------------------------------------------------------------
 # TAB 1: SCAN & CLEAN
 # -------------------------------------------------------------
 with tab_scan:
-    if not active_account_email:
-        st.warning("Please connect a Gmail account in the sidebar to start scanning.")
+    if not auth.has_credentials_file():
+        st.header("🔑 One-Time Setup: Google OAuth Credentials")
+        st.markdown(
+            "Paste the content of your `credentials.json` below to activate Google sign-in for your app:"
+        )
+
+        creds_pasted = st.text_area(
+            "Paste credentials.json here:",
+            height=180,
+            placeholder='{"web":{"client_id":"242816435541-...apps.googleusercontent.com", ...}}'
+        )
+
+        if st.button("💾 Save Credentials & Activate App", type="primary"):
+            raw = creds_pasted.strip()
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    target_path = WORKSPACE_ROOT / "credentials.json"
+                    with open(target_path, "w", encoding="utf-8") as f:
+                        json.dump(parsed, f, indent=2)
+                    st.success("Credentials saved! Activating sign-in...")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Invalid JSON: {e}")
+            else:
+                st.warning("Please paste your credentials JSON into the box above.")
+
+    elif not active_account_email:
+        st.header("📬 Connect Your Gmail Account")
+        st.info("Credentials are saved! Click the button in the left sidebar to connect your first Gmail account:")
+        try:
+            auth_url, _ = auth.get_authorization_url(redirect_uri=get_current_redirect_uri())
+            st.link_button("🔑 Click Here to Sign In with Google", auth_url, type="primary")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
     else:
         st.header(f"🔍 Scan Mailbox: `{active_account_email}`")
 
@@ -233,7 +268,6 @@ with tab_scan:
                             query=custom_query or None,
                             max_results=max_emails,
                         )
-                # Deduplicate
                 unique_mids = list(dict.fromkeys(all_mids))[:max_emails]
 
                 if not unique_mids:
@@ -588,8 +622,8 @@ with tab_cloud:
     st.header("☁️ Cloud Credentials & Phone Setup")
 
     st.markdown("""
-    ### 🔒 Secure Credentials Setup via Streamlit Secrets
-    Because this GitHub repository is public, storing credentials in **Streamlit Secrets** is the safest method.
+    ### 🔑 Manage Credentials
+    You can update your Google OAuth credentials anytime by pasting them or uploading below:
     """)
 
     uploaded = st.file_uploader("Upload Google Cloud credentials.json", type=["json"])
