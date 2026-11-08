@@ -49,23 +49,22 @@ pwa_header_html = """
 """
 components.html(pwa_header_html, height=0, width=0)
 
-# Initialize Session State & Managers
-if "config_mgr" not in st.session_state:
-    st.session_state.config_mgr = ConfigManager()
-if "audit_logger" not in st.session_state:
-    st.session_state.audit_logger = AuditLogger()
-if "auth" not in st.session_state:
-    st.session_state.auth = GmailAuthenticator()
+# Initialize Managers freshly on every run so code updates take effect immediately
+config_mgr: ConfigManager = ConfigManager()
+audit_logger: AuditLogger = AuditLogger()
+auth: GmailAuthenticator = GmailAuthenticator()
+
+st.session_state.config_mgr = config_mgr
+st.session_state.audit_logger = audit_logger
+st.session_state.auth = auth
+
+# Initialize Session UI State
 if "scan_results" not in st.session_state:
     st.session_state.scan_results = []
 if "selected_mids" not in st.session_state:
     st.session_state.selected_mids = set()
 if "active_account" not in st.session_state:
     st.session_state.active_account = None
-
-config_mgr: ConfigManager = st.session_state.config_mgr
-audit_logger: AuditLogger = st.session_state.audit_logger
-auth: GmailAuthenticator = st.session_state.auth
 
 # Retrieve Connected Accounts
 connected_accounts = auth.list_accounts()
@@ -144,15 +143,18 @@ with tab_scan:
             if not q_email or not q_pass:
                 st.warning("Please enter both your Gmail address and 16-character App Password.")
             else:
-                with st.spinner(f"Connecting to Gmail for {q_email}..."):
-                    ok, msg = auth.add_app_password_account(q_email, q_pass)
-                if ok:
-                    st.success(f"🎉 {msg}")
-                    st.session_state.active_account = q_email.strip().lower()
-                    st.session_state.scan_results = []
-                    st.rerun()
-                else:
-                    st.error(msg)
+                try:
+                    with st.spinner(f"Connecting to Gmail for {q_email}..."):
+                        ok, msg = auth.add_app_password_account(q_email, q_pass)
+                    if ok:
+                        st.success(f"🎉 {msg}")
+                        st.session_state.active_account = q_email.strip().lower()
+                        st.session_state.scan_results = []
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                except Exception as e:
+                    st.error(f"Error connecting account: {e}")
     else:
         st.header(f"🔍 Scan Mailbox: `{active_account_email}`")
 
@@ -353,15 +355,18 @@ with tab_add_account:
             if not input_email or not input_pass:
                 st.warning("Please enter both your Gmail address and 16-character App Password.")
             else:
-                with st.spinner(f"Connecting to Gmail for {input_email}..."):
-                    ok, msg = auth.add_app_password_account(input_email, input_pass)
-                if ok:
-                    st.success(f"🎉 {msg}")
-                    st.session_state.active_account = input_email.strip().lower()
-                    st.session_state.scan_results = []
-                    st.rerun()
-                else:
-                    st.error(msg)
+                try:
+                    with st.spinner(f"Connecting to Gmail for {input_email}..."):
+                        ok, msg = auth.add_app_password_account(input_email, input_pass)
+                    if ok:
+                        st.success(f"🎉 {msg}")
+                        st.session_state.active_account = input_email.strip().lower()
+                        st.session_state.scan_results = []
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                except Exception as e:
+                    st.error(f"Error connecting account: {e}")
 
     st.divider()
 
