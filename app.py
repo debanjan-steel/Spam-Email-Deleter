@@ -11,3 +11,4 @@ if str(ROOT_DIR) not in sys.path:
 
 # Launch main web app
 import src.web.app
+

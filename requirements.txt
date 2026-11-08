@@ -1,6 +1,7 @@
 # Web Dashboard
 streamlit>=1.40.0
 pandas>=2.2.0
+pyarrow<25
 
 # Google API & Gmail OAuth
 google-api-python-client>=2.150.0
@@ -13,4 +14,3 @@ pydantic>=2.10.0
 
 # Optional AI Reasoning
 google-genai>=1.0.0
-
