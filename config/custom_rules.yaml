@@ -24,3 +24,4 @@ targeted_subject_keywords:
 
 # Optional age threshold for bulk promotions (null = disabled, or number of days like 30)
 delete_promotions_older_than_days: null
+

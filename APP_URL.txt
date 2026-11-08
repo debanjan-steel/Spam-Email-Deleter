@@ -1,0 +1,20 @@
+==================================================
+🛡️ GMAIL SPAM DELETER - ACCESS URLS
+==================================================
+
+1. Local 1-Click Access:
+   URL: http://localhost:8501
+   
+   To open with 1 click without any terminal:
+   - Double-click 'Start Spam Deleter (No Terminal).vbs' (Starts silently in background with no terminal window)
+   - Or double-click 'Open Spam Deleter.url'
+
+2. Progressive Web App (PWA) Install:
+   - Open http://localhost:8501 in Google Chrome or Microsoft Edge
+   - Click the "Install App" icon in the address bar (or Menu > "Install Gmail Spam Deleter")
+   - The app will now have its own desktop icon, taskbar pin, and standalone app window without browser toolbars!
+
+3. Cloud Deployment (Render / Vercel / Railway):
+   - To host in the cloud 24/7, use the included 'render.yaml' or 'Dockerfile'.
+   - Once deployed, your cloud URL (e.g., https://your-spam-deleter.onrender.com) will be accessible from any phone or computer.
+==================================================

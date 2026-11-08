@@ -1,0 +1,11 @@
+[server]
+enableStaticServing = true
+headless = false
+port = 8501
+
+[theme]
+primaryColor = "#FF4B4B"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#262730"
+textColor = "#FAFAFA"
+font = "sans serif"

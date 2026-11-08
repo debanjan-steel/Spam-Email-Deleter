@@ -55,3 +55,4 @@ class CustomRulesMatcher:
                     return True, f"Manual Rule: Promotional email older than {self.config.delete_promotions_older_than_days} days ({days_old}d old)"
 
         return False, ""
+

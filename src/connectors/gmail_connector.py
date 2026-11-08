@@ -148,3 +148,4 @@ class GmailConnector:
             return res.get("labels", [])
         except Exception:
             return []
+

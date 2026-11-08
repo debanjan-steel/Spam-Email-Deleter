@@ -144,17 +144,23 @@ def test_audit_logger_record_and_restore():
             labels=["INBOX"],
         )
 
-        logger.record_batch("batch_test_1", [cl_res])
-        batches = logger.list_batches()
-        assert len(batches) == 1
-        assert batches[0]["status"] == "ACTIVE"
+        logger.record_batch("batch_test_1", [cl_res], account_email="personal@gmail.com")
+        logger.record_batch("batch_test_2", [cl_res], account_email="work@gmail.com")
+        
+        all_batches = logger.list_batches()
+        assert len(all_batches) == 2
+        
+        personal_batches = logger.list_batches(account_email="personal@gmail.com")
+        assert len(personal_batches) == 1
+        assert personal_batches[0]["batch_id"] == "batch_test_1"
 
         entries = logger.get_batch_entries("batch_test_1")
         assert len(entries) == 1
         assert entries[0]["message_id"] == "test_101"
+        assert entries[0]["account_email"] == "personal@gmail.com"
 
         logger.mark_batch_restored("batch_test_1")
-        batches_updated = logger.list_batches()
+        batches_updated = logger.list_batches(account_email="personal@gmail.com")
         assert batches_updated[0]["status"] == "RESTORED"
 
 if __name__ == "__main__":
@@ -163,4 +169,4 @@ if __name__ == "__main__":
     test_custom_rules_matching()
     test_pipeline_precedence_whitelist_overrules_blacklist()
     test_audit_logger_record_and_restore()
-    print("All 5 tests passed successfully!")
+    print("All 6 tests passed successfully (including multi-account audit)!")

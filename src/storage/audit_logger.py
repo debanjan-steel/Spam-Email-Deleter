@@ -1,9 +1,9 @@
-"""SQLite Audit Logger for recording deletion actions and enabling 1-click restore/undo.
+"""SQLite Audit Logger for recording deletion actions and enabling 1-click restore/undo per account.
 """
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from typing import Any, Dict, Generator, List, Optional
 
 from src.engine.spam_scorer import ClassificationResult
@@ -11,7 +11,7 @@ from src.engine.spam_scorer import ClassificationResult
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 class AuditLogger:
-    """Records deleted emails in SQLite and tracks restore operations."""
+    """Records deleted emails in SQLite and tracks restore operations across multiple accounts."""
 
     def __init__(self, db_path: Path = WORKSPACE_ROOT / "audit_log.db"):
         self.db_path = db_path
@@ -33,6 +33,7 @@ class AuditLogger:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS batches (
                     batch_id TEXT PRIMARY KEY,
+                    account_email TEXT,
                     timestamp TEXT NOT NULL,
                     total_messages INTEGER NOT NULL,
                     action_type TEXT NOT NULL,
@@ -43,6 +44,7 @@ class AuditLogger:
                 CREATE TABLE IF NOT EXISTS audit_entries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     batch_id TEXT NOT NULL,
+                    account_email TEXT,
                     message_id TEXT NOT NULL,
                     thread_id TEXT,
                     sender TEXT,
@@ -57,36 +59,47 @@ class AuditLogger:
                     FOREIGN KEY(batch_id) REFERENCES batches(batch_id)
                 )
             """)
+            # Check for column upgrade if older db exists
+            try:
+                cursor.execute("ALTER TABLE batches ADD COLUMN account_email TEXT")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE audit_entries ADD COLUMN account_email TEXT")
+            except Exception:
+                pass
             conn.commit()
 
     def record_batch(
         self,
         batch_id: str,
         results: List[ClassificationResult],
+        account_email: str = "default",
         action_type: str = "TRASH",
     ) -> None:
-        """Records a batch of deleted messages."""
+        """Records a batch of deleted messages for a specific account."""
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO batches (batch_id, timestamp, total_messages, action_type, status)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO batches (batch_id, account_email, timestamp, total_messages, action_type, status)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (batch_id, now_str, len(results), action_type, "ACTIVE"),
+                (batch_id, account_email, now_str, len(results), action_type, "ACTIVE"),
             )
 
             for r in results:
                 cursor.execute(
                     """
                     INSERT INTO audit_entries (
-                        batch_id, message_id, thread_id, sender, sender_email,
+                        batch_id, account_email, message_id, thread_id, sender, sender_email,
                         subject, date_str, score, action, reason, trashed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         batch_id,
+                        account_email,
                         r.message_id,
                         r.thread_id,
                         r.sender,
@@ -101,19 +114,31 @@ class AuditLogger:
                 )
             conn.commit()
 
-    def list_batches(self, limit: int = 30) -> List[Dict[str, Any]]:
-        """Lists recent deletion batches."""
+    def list_batches(self, account_email: Optional[str] = None, limit: int = 30) -> List[Dict[str, Any]]:
+        """Lists recent deletion batches, optionally filtered by account."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT batch_id, timestamp, total_messages, action_type, status
-                FROM batches
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
+            if account_email:
+                cursor.execute(
+                    """
+                    SELECT batch_id, account_email, timestamp, total_messages, action_type, status
+                    FROM batches
+                    WHERE account_email = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (account_email, limit),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT batch_id, account_email, timestamp, total_messages, action_type, status
+                    FROM batches
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
             return [dict(row) for row in cursor.fetchall()]
 
     def get_batch_entries(self, batch_id: str) -> List[Dict[str, Any]]:
@@ -122,7 +147,7 @@ class AuditLogger:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, batch_id, message_id, sender, sender_email, subject, date_str, score, action, reason, trashed_at, restored_at
+                SELECT id, batch_id, account_email, message_id, sender, sender_email, subject, date_str, score, action, reason, trashed_at, restored_at
                 FROM audit_entries
                 WHERE batch_id = ?
                 ORDER BY id ASC

@@ -142,3 +142,4 @@ class SpamScorer:
             is_protected=False,
             labels=message.labels,
         )
+

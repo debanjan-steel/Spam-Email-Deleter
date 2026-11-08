@@ -1,9 +1,11 @@
 """Streamlit Web Dashboard for Intelligent Spam Email Deleter.
+Supports Progressive Web App (PWA) installation and Multiple Gmail Accounts.
 """
 from datetime import datetime
 from pathlib import Path
 import uuid
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 
 from src.auth.gmail_auth import GmailAuthenticator
@@ -23,6 +25,25 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Inject PWA Manifest & Service Worker for 1-Click App Installation
+pwa_header_html = """
+<link rel="manifest" href="/app/static/manifest.json">
+<meta name="theme-color" content="#FF4B4B">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Spam Deleter">
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/app/static/sw.js')
+        .then(reg => console.log('PWA ServiceWorker registered', reg))
+        .catch(err => console.log('PWA ServiceWorker registration failed', err));
+    });
+  }
+</script>
+"""
+components.html(pwa_header_html, height=0, width=0)
+
 # Initialize Session State & Managers
 if "config_mgr" not in st.session_state:
     st.session_state.config_mgr = ConfigManager()
@@ -34,55 +55,92 @@ if "scan_results" not in st.session_state:
     st.session_state.scan_results = []
 if "selected_mids" not in st.session_state:
     st.session_state.selected_mids = set()
+if "active_account" not in st.session_state:
+    st.session_state.active_account = None
 
 config_mgr: ConfigManager = st.session_state.config_mgr
 audit_logger: AuditLogger = st.session_state.audit_logger
 auth: GmailAuthenticator = st.session_state.auth
 
-# Sidebar: Account & Quick Status
+# Retrieve Connected Accounts
+connected_accounts = auth.list_accounts()
+account_emails = [a["email"] for a in connected_accounts]
+
+# Ensure valid active account selection
+if account_emails:
+    if st.session_state.active_account not in account_emails:
+        st.session_state.active_account = account_emails[0]
+else:
+    st.session_state.active_account = None
+
+active_account_email = st.session_state.active_account
+active_account_info = next((a for a in connected_accounts if a["email"] == active_account_email), None)
+
+# Sidebar: Multi-Account Switcher & Connection Management
 with st.sidebar:
     st.title("🛡️ Mail Guard")
-    st.caption("Intelligent Gmail Cleaner & Spam Deleter")
+    st.caption("Multi-Account Gmail Cleaner & Spam Deleter")
     st.divider()
 
-    user_email, total_msgs = None, None
-    is_connected = False
-
-    if auth.has_credentials_file():
-        if auth.has_saved_token():
-            try:
-                user_email, total_msgs = auth.get_profile()
-                if user_email:
-                    is_connected = True
-            except Exception:
-                is_connected = False
-
-        if is_connected:
-            st.success(f"**Connected**\n\n📧 `{user_email}`")
-            if total_msgs is not None:
-                st.caption(f"Total Mailbox Messages: {total_msgs:,}")
-            if st.button("🚪 Sign Out / Reset Token", use_container_width=True):
-                auth.logout()
+    if not auth.has_credentials_file():
+        st.error("Missing `credentials.json`")
+        st.info("Download your Google Cloud OAuth Client credentials and place them in the project root or upload via the Setup tab.")
+    else:
+        st.subheader("📬 Connected Accounts")
+        if connected_accounts:
+            selected_email = st.selectbox(
+                "Switch Active Account",
+                options=account_emails,
+                index=account_emails.index(active_account_email) if active_account_email in account_emails else 0,
+                key="account_selector",
+            )
+            if selected_email != st.session_state.active_account:
+                st.session_state.active_account = selected_email
                 st.session_state.scan_results = []
+                st.session_state.selected_mids = set()
                 st.rerun()
+
+            if active_account_info:
+                st.success(f"**Active**: `{active_account_email}`")
+                total_msgs = active_account_info.get("messages_total", 0)
+                st.caption(f"Total Mailbox Messages: {total_msgs:,}")
+
+            col_add, col_del = st.columns([1, 1])
+            with col_add:
+                if st.button("➕ Add Account", use_container_width=True):
+                    try:
+                        with st.spinner("Opening browser to authorize another Gmail account..."):
+                            new_email = auth.add_account()
+                        st.success(f"Connected `{new_email}`!")
+                        st.session_state.active_account = new_email
+                        st.session_state.scan_results = []
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to add account: {e}")
+            with col_del:
+                if st.button("🗑️ Disconnect", use_container_width=True):
+                    auth.remove_account(active_account_email)
+                    st.warning(f"Disconnected `{active_account_email}`.")
+                    st.session_state.active_account = None
+                    st.session_state.scan_results = []
+                    st.rerun()
         else:
-            st.warning("Gmail not connected yet.")
-            if st.button("🔑 Sign In with Google", type="primary", use_container_width=True):
+            st.warning("No Gmail accounts connected.")
+            if st.button("🔑 Connect First Gmail Account", type="primary", use_container_width=True):
                 try:
-                    with st.spinner("Opening browser for Google OAuth consent..."):
-                        auth.get_credentials()
-                    st.success("Authenticated successfully!")
+                    with st.spinner("Opening browser for Google OAuth sign-in..."):
+                        first_email = auth.add_account()
+                    st.success(f"Connected `{first_email}`!")
+                    st.session_state.active_account = first_email
                     st.rerun()
                 except Exception as e:
                     st.error(f"Authentication failed: {e}")
-    else:
-        st.error("Missing `credentials.json`")
-        st.info("Place your Google Cloud OAuth Client credentials.json in the project folder to connect.")
 
     st.divider()
     st.markdown("### Safety Guarantee")
-    st.markdown("✅ **Soft-delete only**: Items are moved to Trash with 30-day recovery.")
-    st.markdown("✅ **Zero-touch whitelist**: Personal contacts, 2FA codes, order receipts, and starred emails are permanently immune.")
+    st.markdown("✅ **Soft-delete only**: Items are moved to Trash (30-day recovery window).")
+    st.markdown("✅ **Immunity Whitelist**: Personal contacts, 2FA codes, order receipts, and starred emails are never deleted.")
+    st.markdown("✅ **Install as App**: In Chrome/Edge, click the **Install App** icon in the address bar to add to your desktop.")
 
 # Main Application Tabs
 tab_scan, tab_rules, tab_whitelist, tab_audit, tab_setup = st.tabs([
@@ -97,11 +155,11 @@ tab_scan, tab_rules, tab_whitelist, tab_audit, tab_setup = st.tabs([
 # TAB 1: SCAN & CLEAN
 # -------------------------------------------------------------
 with tab_scan:
-    st.header("🔍 Scan Mailbox for Unwanted Emails")
-
-    if not is_connected:
-        st.warning("Please sign in with Google in the sidebar to scan your mailbox.")
+    if not active_account_email:
+        st.warning("Please connect a Gmail account in the sidebar to start scanning.")
     else:
+        st.header(f"🔍 Scan Mailbox: `{active_account_email}`")
+
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
             folders_to_scan = st.multiselect(
@@ -125,18 +183,18 @@ with tab_scan:
                 help="Advanced Gmail search operators to refine the scan."
             )
 
-        btn_scan = st.button("▶️ Run Simulation / Dry-Run Scan", type="primary")
+        btn_scan = st.button(f"▶️ Run Dry-Run Scan on {active_account_email}", type="primary")
 
         if btn_scan:
             try:
-                service = auth.get_service()
+                service = auth.get_service_for_account(active_account_email)
                 connector = GmailConnector(service)
                 whitelist_guard = WhitelistGuard(config_mgr.whitelist)
                 custom_rules = CustomRulesMatcher(config_mgr.custom_rules)
                 scorer = SpamScorer(whitelist_guard, custom_rules, config_mgr.app_config.detection)
 
                 all_mids = []
-                with st.spinner("Fetching message IDs from Gmail..."):
+                with st.spinner(f"Fetching message IDs from {active_account_email}..."):
                     if folders_to_scan:
                         for label in folders_to_scan:
                             mids = connector.list_message_ids(
@@ -188,7 +246,7 @@ with tab_scan:
             m4.metric("🚨 Auto-Detected Spam", spam_count)
             m5.metric("✅ Safe / Normal", safe_count)
 
-            st.subheader("Candidate Emails")
+            st.subheader(f"Candidate Emails ({active_account_email})")
 
             # Bulk Actions
             col_a, col_b, col_c = st.columns([1, 1, 2])
@@ -240,28 +298,33 @@ with tab_scan:
             )
             st.session_state.selected_mids = new_selected
 
-            st.write(f"**{len(new_selected)} emails selected for deletion.**")
+            st.write(f"**{len(new_selected)} emails selected for deletion in {active_account_email}.**")
 
             # Execution Button
             if new_selected:
-                if st.button(f"🗑️ Move {len(new_selected)} Selected Emails to Trash", type="primary"):
+                if st.button(f"🗑️ Move {len(new_selected)} Selected Emails to Trash ({active_account_email})", type="primary"):
                     try:
-                        service = auth.get_service()
+                        service = auth.get_service_for_account(active_account_email)
                         connector = GmailConnector(service)
                         batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
                         
                         trashed_results = []
-                        with st.spinner(f"Moving {len(new_selected)} emails to Trash..."):
+                        with st.spinner(f"Moving {len(new_selected)} emails to Trash in {active_account_email}..."):
                             for r in results:
                                 if r.message_id in new_selected:
                                     success = connector.trash_message(r.message_id)
                                     if success:
                                         trashed_results.append(r)
 
-                        # Record in Audit Log
-                        audit_logger.record_batch(batch_id, trashed_results, action_type="TRASH")
+                        # Record in Audit Log with account email
+                        audit_logger.record_batch(
+                            batch_id,
+                            trashed_results,
+                            account_email=active_account_email,
+                            action_type="TRASH"
+                        )
                         
-                        st.success(f"Successfully moved {len(trashed_results)} emails to Trash! Batch ID: `{batch_id}`")
+                        st.success(f"Successfully moved {len(trashed_results)} emails to Trash in `{active_account_email}`! Batch ID: `{batch_id}`")
                         st.info("You can undo this anytime in the 'Audit Log & Undo' tab.")
                         
                         # Clear processed from current scan results
@@ -280,12 +343,12 @@ with tab_rules:
     st.header("🎯 User-Defined Manual Deletion Rules")
     st.markdown(
         "Define exact email addresses, domains, or subject keywords you want **automatically flagged for deletion**. "
-        "These take effect immediately during scans (unless protected by your Whitelist)."
+        "These apply across all your connected accounts (unless protected by your Whitelist)."
     )
 
     custom_rules = config_mgr.custom_rules
 
-    # Section 1: Add New Rule
+    # Add New Rule
     with st.expander("➕ Add New Deletion Rule", expanded=True):
         col_type, col_val, col_btn = st.columns([1, 2, 1])
         with col_type:
@@ -323,7 +386,7 @@ with tab_rules:
 
     st.divider()
 
-    # Section 2: Active Rules Display
+    # Active Rules Display
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -458,40 +521,42 @@ with tab_whitelist:
 with tab_audit:
     st.header("↩️ Audit Log & Undo / Rollback")
     st.markdown(
-        "Every batch of emails moved to Trash is recorded here. "
+        "Every batch of emails moved to Trash is recorded here with the associated Gmail account. "
         "If an email was trashed by mistake, you can **instantly undo the entire batch**."
     )
 
-    batches = audit_logger.list_batches(limit=25)
+    batches = audit_logger.list_batches(limit=30)
     if not batches:
         st.info("No cleanup batches recorded yet.")
     else:
         for b in batches:
             bid = b["batch_id"]
+            b_acc = b.get("account_email") or "Unknown"
             status = b["status"]
             ts = b["timestamp"][:19].replace("T", " ")
             count = b["total_messages"]
 
-            with st.expander(f"📦 Batch: {bid} — {count} emails — {ts} UTC [{status}]", expanded=(status == "ACTIVE")):
+            with st.expander(f"📦 Batch: {bid} — Account: {b_acc} — {count} emails — {ts} UTC [{status}]", expanded=(status == "ACTIVE")):
                 b_col1, b_col2 = st.columns([3, 1])
                 with b_col1:
-                    st.write(f"**Status**: `{status}` | **Action**: `{b['action_type']}` | **Messages**: `{count}`")
+                    st.write(f"**Account**: `{b_acc}` | **Status**: `{status}` | **Action**: `{b['action_type']}` | **Messages**: `{count}`")
                 with b_col2:
-                    if status == "ACTIVE" and is_connected:
+                    if status == "ACTIVE":
                         if st.button(f"↩️ Undo / Restore Batch", key=f"undo_{bid}", type="primary"):
                             try:
-                                service = auth.get_service()
+                                # Ensure we restore on the matching account
+                                service = auth.get_service_for_account(b_acc)
                                 connector = GmailConnector(service)
                                 entries = audit_logger.get_batch_entries(bid)
                                 
-                                with st.spinner(f"Restoring {len(entries)} emails from Trash..."):
+                                with st.spinner(f"Restoring {len(entries)} emails from Trash in {b_acc}..."):
                                     restored = 0
                                     for entry in entries:
                                         if connector.untrash_message(entry["message_id"]):
                                             restored += 1
                                 
                                 audit_logger.mark_batch_restored(bid)
-                                st.success(f"Restored {restored} emails back to their original state!")
+                                st.success(f"Restored {restored} emails back in `{b_acc}`!")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Failed to restore batch: {e}")
@@ -508,34 +573,38 @@ with tab_audit:
 # TAB 5: SETUP & HELP
 # -------------------------------------------------------------
 with tab_setup:
-    st.header("⚙️ Google Cloud OAuth Setup Guide")
-    st.markdown("""
-    To allow this local dashboard to connect to your Gmail safely without entering your password, 
-    you need a free **Google Cloud OAuth Client ID**.
-
-    ### 3-Minute Step-by-Step Setup:
-    1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-    2. Create a new project (or select an existing one), e.g., `Spam Deleter`.
-    3. In the search bar at the top, search for **Gmail API** and click **Enable**.
-    4. Go to **APIs & Services** > **OAuth consent screen**:
-       - Choose **External** (or Internal if on Google Workspace).
-       - Fill in an App name (e.g. `Spam Deleter`) and your email address.
-       - Under **Test users**, add your own Gmail address (this allows you to log in).
-    5. Go to **APIs & Services** > **Credentials**:
-       - Click **Create Credentials** > **OAuth client ID**.
-       - Application type: Select **Desktop app**.
-       - Click **Create**.
-    6. Click **Download JSON** on the created client, rename the downloaded file to `credentials.json`, and place it in the root folder of this project:
-       ```
-       c:\\Users\\deban\\OneDrive\\Desktop\\Self Projects\\New Project\\credentials.json
-       ```
-    7. Return to the dashboard and click **Sign In with Google** in the sidebar. A Google login prompt will open in your browser asking for permission. Click **Allow**!
-    """)
+    st.header("⚙️ Setup, 1-Click PWA & Help")
+    
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        st.subheader("📱 Progressive Web App (PWA)")
+        st.markdown("""
+        You do **not** need to keep a terminal open!
+        
+        1. Open the app in **Google Chrome** or **Microsoft Edge**.
+        2. Look at the top right of the browser address bar for the **Install App icon** (or click Menu `...` > **Install Gmail Spam Deleter**).
+        3. Once installed, it launches in its own native app window and adds an icon to your desktop & taskbar!
+        """)
+    with col_s2:
+        st.subheader("⚡ 1-Click Launchers in Project Folder")
+        st.markdown("""
+        In your project folder, you can simply double click:
+        - **`Open App (Silent).vbs`**: Starts the app silently in the background (no black terminal window!) and opens it in your browser.
+        - **`Open Spam Deleter.url`**: Instant web shortcut directly to the running dashboard.
+        """)
 
     st.divider()
 
-    # Upload helper
-    st.subheader("Upload `credentials.json` directly")
+    st.subheader("🔑 Google Cloud OAuth Setup Guide")
+    st.markdown("""
+    To allow this app to connect to your Gmail accounts safely without passwords:
+    1. Go to [Google Cloud Console](https://console.cloud.google.com/).
+    2. Create a project and search for **Gmail API** > click **Enable**.
+    3. Under **OAuth consent screen**, set user type to **External**, add your Gmail accounts to the **Test users** list.
+    4. Under **Credentials**, click **Create Credentials** > **OAuth client ID** > Application Type: **Desktop app**.
+    5. Download the JSON, rename it to `credentials.json`, and place it in this project folder (or upload below).
+    """)
+
     uploaded = st.file_uploader("Upload your downloaded Google Cloud credentials.json", type=["json"])
     if uploaded is not None:
         target_path = WORKSPACE_ROOT / "credentials.json"

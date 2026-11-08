@@ -99,3 +99,4 @@ class ConfigManager:
         self.app_config = self.load_app_config()
         self.whitelist = self.load_whitelist()
         self.custom_rules = self.load_custom_rules()
+

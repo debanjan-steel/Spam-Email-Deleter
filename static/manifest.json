@@ -1,0 +1,25 @@
+{
+  "name": "Gmail Spam Deleter & Guard",
+  "short_name": "SpamDeleter",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0E1117",
+  "theme_color": "#FF4B4B",
+  "description": "Intelligent multi-account Gmail cleaner and spam deleter with safety safeguards.",
+  "icons": [
+    {
+      "src": "/app/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/app/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

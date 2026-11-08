@@ -31,3 +31,4 @@ detection:
 # Storage
 storage:
   audit_db_path: "audit_log.db"
+

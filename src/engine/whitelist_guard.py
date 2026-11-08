@@ -57,3 +57,4 @@ class WhitelistGuard:
                 return True, f"Protected: Contains vital keyword '{kw}'"
 
         return False, ""
+
