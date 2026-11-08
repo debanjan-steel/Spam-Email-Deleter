@@ -253,3 +253,4 @@ class GmailImapConnector:
                 mail.logout()
             except Exception:
                 pass
+

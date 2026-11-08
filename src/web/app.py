@@ -1,9 +1,8 @@
 """Streamlit Web Dashboard for Intelligent Spam Email Deleter.
-Supports Progressive Web App (PWA) installation, Google App Passwords, OAuth, and Multiple Gmail Accounts.
+Pure Google App Passwords architecture for seamless, restriction-free Gmail access.
 """
 import sys
 from datetime import datetime
-import json
 from pathlib import Path
 import uuid
 
@@ -30,20 +29,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-def get_current_redirect_uri() -> str:
-    """Detects whether running locally or on Streamlit Cloud to set OAuth redirect URI."""
-    if hasattr(st, "secrets") and "app_url" in st.secrets:
-        return str(st.secrets["app_url"]).rstrip("/")
-    try:
-        host = st.context.headers.get("host", "")
-        if "localhost" in host or "127.0.0.1" in host:
-            return "http://localhost:8501"
-        if host:
-            return f"https://{host}"
-    except Exception:
-        pass
-    return "https://spam-email-deleter.streamlit.app"
 
 # Inject PWA Manifest & Service Worker for 1-Click App Installation on Mobile & Desktop
 pwa_header_html = """
@@ -82,21 +67,6 @@ config_mgr: ConfigManager = st.session_state.config_mgr
 audit_logger: AuditLogger = st.session_state.audit_logger
 auth: GmailAuthenticator = st.session_state.auth
 
-# Handle Web/Mobile OAuth Redirect Callback
-query_params = st.query_params
-if "code" in query_params:
-    auth_code = query_params["code"]
-    try:
-        redirect_uri = get_current_redirect_uri()
-        newly_connected = auth.exchange_code(auth_code, redirect_uri=redirect_uri)
-        st.session_state.active_account = newly_connected
-        st.query_params.clear()
-        st.success(f"🎉 Successfully connected `{newly_connected}` via Google OAuth!")
-        st.rerun()
-    except Exception as e:
-        st.query_params.clear()
-        st.error(f"OAuth code exchange failed: {e}")
-
 # Retrieve Connected Accounts
 connected_accounts = auth.list_accounts()
 account_emails = [a["email"] for a in connected_accounts]
@@ -110,7 +80,7 @@ else:
 active_account_email = st.session_state.active_account
 active_account_info = next((a for a in connected_accounts if a["email"] == active_account_email), None)
 
-# Sidebar: Multi-Account Switcher & Connection Management
+# Sidebar: Multi-Account Switcher & Quick Navigation
 with st.sidebar:
     st.title("🛡️ Mail Guard")
     st.caption("Multi-Account Gmail Cleaner & Spam Deleter")
@@ -119,7 +89,7 @@ with st.sidebar:
     st.subheader("📬 Connected Accounts")
     if connected_accounts:
         selected_email = st.selectbox(
-            "Switch Active Account",
+            "Active Mailbox",
             options=account_emails,
             index=account_emails.index(active_account_email) if active_account_email in account_emails else 0,
             key="account_selector",
@@ -131,35 +101,33 @@ with st.sidebar:
             st.rerun()
 
         if active_account_info:
-            acc_type = active_account_info.get("type", "oauth")
-            badge = "🔑 App Password" if acc_type == "app_password" else "🌐 Google OAuth"
-            st.success(f"**Active**: `{active_account_email}`\n\n({badge})")
+            st.success(f"**Connected**: `{active_account_email}`")
             total_msgs = active_account_info.get("messages_total", 0)
             st.caption(f"Total Mailbox Messages: {total_msgs:,}")
 
-        if st.button("🗑️ Disconnect Active Account", use_container_width=True):
+        if st.button("🗑️ Disconnect This Account", use_container_width=True):
             auth.remove_account(active_account_email)
             st.warning(f"Disconnected `{active_account_email}`.")
             st.session_state.active_account = None
             st.session_state.scan_results = []
             st.rerun()
     else:
-        st.info("No accounts connected yet. Add one below!")
+        st.info("No accounts connected yet. Connect one below!")
 
     st.divider()
     st.markdown("### Safety Guarantee")
     st.markdown("✅ **Soft-delete only**: Items moved to Trash (30-day recovery window).")
     st.markdown("✅ **Zero-touch whitelist**: Personal contacts, 2FA codes, order receipts, and starred emails are never deleted.")
-    st.markdown("✅ **Mobile PWA**: Open in Safari/Chrome on your phone and tap **Add to Home Screen**.")
+    st.markdown("✅ **Mobile PWA**: Open on your phone in Safari/Chrome and tap **Add to Home Screen** to install as a native app.")
 
 # Main Application Tabs
-tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_cloud = st.tabs([
+tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_policy = st.tabs([
     "🔍 Scan & Clean",
     "➕ Add Gmail Account",
     "🎯 Custom Deletion Rules",
     "🛡️ Whitelist & Safeguards",
     "↩️ Audit Log & Undo",
-    "☁️ Cloud Credentials & Policy",
+    "📄 Privacy & Security Policy",
 ])
 
 # -------------------------------------------------------------
@@ -167,8 +135,24 @@ tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_cloud = st.t
 # -------------------------------------------------------------
 with tab_scan:
     if not active_account_email:
-        st.header("📬 Connect Your First Gmail Account")
-        st.info("No Gmail account is active. Go to the **➕ Add Gmail Account** tab to connect your inbox in 10 seconds!")
+        st.header("📬 Connect Your Gmail Account")
+        st.info("No Gmail account is connected yet. Enter your details below or switch to the **➕ Add Gmail Account** tab for step-by-step instructions.")
+
+        q_email = st.text_input("Gmail Address", placeholder="e.g. yourname@gmail.com", key="quick_acc_email")
+        q_pass = st.text_input("16-Character Google App Password", placeholder="e.g. abcd efgh ijkl mnop", type="password", key="quick_acc_pass")
+        if st.button("🚀 Connect Gmail Account", type="primary", key="quick_connect_btn", use_container_width=True):
+            if not q_email or not q_pass:
+                st.warning("Please enter both your Gmail address and 16-character App Password.")
+            else:
+                with st.spinner(f"Connecting to Gmail for {q_email}..."):
+                    ok, msg = auth.add_app_password_account(q_email, q_pass)
+                if ok:
+                    st.success(f"🎉 {msg}")
+                    st.session_state.active_account = q_email.strip().lower()
+                    st.session_state.scan_results = []
+                    st.rerun()
+                else:
+                    st.error(msg)
     else:
         st.header(f"🔍 Scan Mailbox: `{active_account_email}`")
 
@@ -190,9 +174,9 @@ with tab_scan:
             )
         with col3:
             custom_query = st.text_input(
-                "Optional Gmail Query",
+                "Optional Filter",
                 placeholder="e.g. is:unread",
-                help="Advanced search filters (e.g. is:unread)."
+                help="Optional filter (e.g. is:unread)."
             )
 
         btn_scan = st.button(f"▶️ Run Dry-Run Scan on {active_account_email}", type="primary")
@@ -339,59 +323,66 @@ with tab_scan:
                         st.error(f"Failed to move items to trash: {e}")
 
 # -------------------------------------------------------------
-# TAB 2: ADD GMAIL ACCOUNT (APP PASSWORD & OAUTH)
+# TAB 2: ADD GMAIL ACCOUNT (APP PASSWORD ONLY)
 # -------------------------------------------------------------
 with tab_add_account:
-    st.header("➕ Connect a Gmail Account")
+    st.header("➕ Connect with Google App Password")
+    st.markdown(
+        "Connect any Gmail account instantly using a secure **16-character Google App Password**. "
+        "No Google Cloud Console setup, no test users, and zero permissions roadblocks!"
+    )
 
-    st.markdown("""
-    You can connect **any Gmail account** using a Google App Password without dealing with Google Cloud Console,
-    test users, or verification!
-    """)
+    with st.container():
+        input_email = st.text_input(
+            "Gmail Address",
+            placeholder="e.g. yourname@gmail.com",
+            key="add_acc_email",
+            help="The Gmail address you want to scan and clean."
+        )
+        input_pass = st.text_input(
+            "16-Character Google App Password",
+            placeholder="e.g. abcd efgh ijkl mnop",
+            type="password",
+            key="add_acc_pass",
+            help="The 16-character code generated from your Google Account Security settings."
+        )
 
-    col_method1, col_method2 = st.columns(2)
+        btn_connect = st.button("🚀 Connect Gmail Account", type="primary", use_container_width=True)
 
-    with col_method1:
-        st.subheader("⚡ Method 1: Google App Password (Recommended)")
-        st.markdown("""
-        **Zero setup, zero test user limits. Works with ANY Gmail account in 30 seconds:**
-
-        1. Go to **[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)** in your browser *(sign in to the Gmail account you want to connect)*.
-        2. Name it `Spam Deleter` and click **Create**.
-        3. Google will show you a yellow box with a **16-character password** (e.g. `abcd efgh ijkl mnop`).
-        4. Enter your email and that 16-character code below:
-        """)
-
-        input_email = st.text_input("Gmail Address", placeholder="e.g. yourname@gmail.com", key="imap_email")
-        input_pass = st.text_input("16-Character App Password", placeholder="e.g. abcd efgh ijkl mnop", type="password", key="imap_pass")
-
-        if st.button("🚀 Connect with App Password", type="primary", use_container_width=True):
+        if btn_connect:
             if not input_email or not input_pass:
                 st.warning("Please enter both your Gmail address and 16-character App Password.")
             else:
-                with st.spinner(f"Verifying and connecting {input_email}..."):
+                with st.spinner(f"Connecting to Gmail for {input_email}..."):
                     ok, msg = auth.add_app_password_account(input_email, input_pass)
                 if ok:
-                    st.success(msg)
+                    st.success(f"🎉 {msg}")
                     st.session_state.active_account = input_email.strip().lower()
                     st.session_state.scan_results = []
                     st.rerun()
                 else:
                     st.error(msg)
 
-    with col_method2:
-        st.subheader("🌐 Method 2: Sign In with Google (OAuth)")
-        st.markdown("""
-        Connect via Google's official OAuth consent window (requires adding your email to Test Users in Google Cloud Console).
-        """)
-        if not auth.has_credentials_file():
-            st.info("OAuth credentials not configured yet. Use Method 1 for instant access!")
-        else:
-            try:
-                auth_url, _ = auth.get_authorization_url(redirect_uri=get_current_redirect_uri())
-                st.link_button("🔑 Sign In with Google", auth_url, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error generating OAuth link: {e}")
+    st.divider()
+
+    st.subheader("📖 How to Find & Generate Your Account's Google App Password")
+    st.markdown("""
+An **App Password** is a dedicated 16-character code Google generates specifically for third-party apps to access your Gmail via IMAP without ever sharing your actual Google password.
+
+#### 4 Simple Steps (Takes ~30 seconds):
+1. **Ensure 2-Step Verification is Enabled**:
+   - Google requires 2-Step Verification before allowing App Passwords.
+   - If not yet enabled, turn it on here: 👉 [myaccount.google.com/signinoptions/two-step-verification](https://myaccount.google.com/signinoptions/two-step-verification)
+2. **Open the Direct App Passwords Page**:
+   - Go directly to: 👉 **[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)**
+   - *(Make sure you are logged in with the Gmail account you want to connect)*.
+3. **Generate the 16-Character Code**:
+   - In the text box labeled **"App name"**, type `Spam Deleter` (or any label you prefer) and click **Create**.
+4. **Copy & Connect**:
+   - Google will show a yellow box with a **16-character code** (formatted like `abcd efgh ijkl mnop`).
+   - Copy the code, paste it into the **16-Character Google App Password** field above, and click **Connect Gmail Account**!
+""")
+    st.info("💡 **Note**: Any spaces in your copied code are stripped automatically. You can safely revoke or delete this App Password anytime directly in your Google Account Security settings.")
 
 # -------------------------------------------------------------
 # TAB 3: CUSTOM DELETION RULES (MANUAL BLACKLIST)
@@ -499,7 +490,7 @@ with tab_whitelist:
     with col_f1:
         new_starred = st.checkbox("Protect Starred / Flagged Emails", value=wl.protection_flags.protect_starred)
     with col_f2:
-        new_imp = st.checkbox("Protect Gmail 'Important' Emails", value=wl.protection_flags.protect_important)
+        new_imp = st.checkbox("Protect Important Emails", value=wl.protection_flags.protect_important)
 
     if new_starred != wl.protection_flags.protect_starred or new_imp != wl.protection_flags.protect_important:
         wl.protection_flags.protect_starred = new_starred
@@ -620,18 +611,17 @@ with tab_audit:
                     st.dataframe(e_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 6: PHONE & CLOUD 24/7 SETUP
+# TAB 6: PRIVACY & SECURITY POLICY
 # -------------------------------------------------------------
-with tab_cloud:
-    st.header("☁️ Cloud Credentials & Policy")
+with tab_policy:
+    st.header("📄 Privacy & Security Policy")
 
-    st.subheader("📄 Application Privacy Policy")
     st.markdown("""
     **Effective Date:** 2026-11-08  
     **Application:** Spam Email Deleter (`https://spam-email-deleter.streamlit.app`)
 
-    - **Purpose & Data Use**: This application connects to your Gmail account solely to identify spam/unsolicited emails and allow you to move them to Trash.
-    - **No External Data Storage**: Your email content, contact lists, and headers are processed securely in your active session and are never sold, transferred, or stored on external advertising servers.
-    - **Security**: Access tokens are kept encrypted. You can disconnect accounts at any time.
-    - **Contact**: `debanjan17052002@gmail.com`
+    - **Purpose & Data Use**: This application connects to your Gmail account over secure SSL IMAP solely to identify spam/unsolicited emails and allow you to move them to Trash.
+    - **No External Data Storage**: Your email content, contact lists, and headers are processed directly in your active session and are never sold, transferred, or stored on external advertising servers.
+    - **Security**: App Passwords are kept encrypted locally in your isolated session. You can disconnect accounts or revoke App Passwords at any time in your Google Account Security settings.
+    - **Developer Contact**: `debanjan17052002@gmail.com`
     """)
