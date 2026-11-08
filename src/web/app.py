@@ -1,9 +1,16 @@
 """Streamlit Web Dashboard for Intelligent Spam Email Deleter.
 Supports Progressive Web App (PWA) installation, Mobile/Cloud OAuth, and Multiple Gmail Accounts.
 """
+import sys
 from datetime import datetime
 from pathlib import Path
 import uuid
+
+# Ensure repository root is in sys.path regardless of execution environment (Streamlit Cloud, Docker, Local)
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKSPACE_ROOT))
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -15,8 +22,6 @@ from src.engine.custom_rules import CustomRulesMatcher
 from src.engine.spam_scorer import ClassificationResult, SpamScorer
 from src.engine.whitelist_guard import WhitelistGuard
 from src.storage.audit_logger import AuditLogger
-
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 st.set_page_config(
     page_title="Gmail Spam Deleter & Guard",
