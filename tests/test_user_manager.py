@@ -87,5 +87,36 @@ def test_user_manager_full_lifecycle():
 
     print("UserManager full lifecycle tests passed successfully!")
 
+def test_legacy_schema_migration():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        db_path = temp_path / "legacy_users.db"
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE app_users (
+                id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        user_mgr = UserManager(
+            db_path=db_path,
+            data_dir=temp_path / "data",
+            secret_key_path=temp_path / "secret.key",
+        )
+
+        ok, msg, u = user_mgr.create_user("migrated@gmail.com", "valid_pass_123")
+        assert ok, f"Migration failed: {msg}"
+        assert u["gmail"] == "migrated@gmail.com"
+
+    print("Legacy schema auto-migration test passed successfully!")
+
 if __name__ == "__main__":
     test_user_manager_full_lifecycle()
+    test_legacy_schema_migration()

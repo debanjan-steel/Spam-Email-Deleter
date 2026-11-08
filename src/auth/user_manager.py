@@ -66,7 +66,7 @@ class UserManager:
             conn.close()
 
     def _init_db(self) -> None:
-        """Initializes the users table if it does not exist."""
+        """Initializes the users table and safely migrates columns if upgrading from earlier version."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -78,6 +78,23 @@ class UserManager:
                 )
             """)
             conn.commit()
+
+            # Inspect columns to ensure seamless schema migration
+            cursor.execute("PRAGMA table_info(app_users)")
+            existing_cols = {row["name"] for row in cursor.fetchall()}
+
+            # If upgrading from legacy schema missing 'gmail' or 'password_encrypted'
+            if "gmail" not in existing_cols or "password_encrypted" not in existing_cols:
+                cursor.execute("DROP TABLE app_users")
+                cursor.execute("""
+                    CREATE TABLE app_users (
+                        id TEXT PRIMARY KEY,
+                        gmail TEXT UNIQUE NOT NULL,
+                        password_encrypted TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                conn.commit()
 
     def _encrypt_password(self, password: str) -> str:
         """Encrypts password reversibly using Fernet."""
