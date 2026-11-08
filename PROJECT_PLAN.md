@@ -11,9 +11,10 @@
 
 | Metric | Status |
 | :--- | :--- |
-| **Current Phase** | **Milestone 5: Google Cloud Credentials & Live Multi-Account Testing** |
-| **Active Task** | User drops `credentials.json` into project folder, double-clicks `Start Spam Deleter (No Terminal).vbs` to connect Gmail accounts |
-| **Interface** | Progressive Web App (PWA) + Local Web Dashboard (Installable via Chrome/Edge) |
+| **Current Phase** | **Milestone 5: Cloud Deployment & Google OAuth Connection** |
+| **Active Task** | Deploy to Streamlit Community Cloud (free permanent hosting) & connect Google OAuth |
+| **GitHub Repository** | `https://github.com/debanjan-steel/Spam-Email-Deleter` (Branch: `main`) |
+| **Interface** | Progressive Web App (PWA) on Mobile & Desktop |
 | **1-Click Launchers** | `Start Spam Deleter (No Terminal).vbs` (Silent background runner, NO terminal window) & `Open Spam Deleter.url` |
 | **Email Target** | Gmail Multi-Account (Switch between personal, work, and extra Gmail inboxes) |
 | **Cloud Deploy Ready** | `render.yaml`, `Dockerfile`, `supabase_schema.sql` included |
