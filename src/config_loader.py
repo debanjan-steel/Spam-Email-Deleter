@@ -4,7 +4,7 @@ Handles loading and persisting config.yaml, whitelist.yaml, and custom_rules.yam
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -40,11 +40,25 @@ class WhitelistConfig(BaseModel):
     protected_domains: List[str] = Field(default_factory=list)
     protected_keywords: List[str] = Field(default_factory=list)
 
+    @field_validator("protected_senders", "protected_domains", "protected_keywords", mode="before")
+    @classmethod
+    def coerce_none_to_list(cls, v: Any) -> List[str]:
+        if v is None:
+            return []
+        return v
+
 class CustomRulesConfig(BaseModel):
     targeted_senders: List[str] = Field(default_factory=list)
     targeted_domains: List[str] = Field(default_factory=list)
     targeted_subject_keywords: List[str] = Field(default_factory=list)
     delete_promotions_older_than_days: Optional[int] = None
+
+    @field_validator("targeted_senders", "targeted_domains", "targeted_subject_keywords", mode="before")
+    @classmethod
+    def coerce_none_to_list(cls, v: Any) -> List[str]:
+        if v is None:
+            return []
+        return v
 
 class ConfigManager:
     """Manages application configurations and persistence."""
@@ -99,4 +113,3 @@ class ConfigManager:
         self.app_config = self.load_app_config()
         self.whitelist = self.load_whitelist()
         self.custom_rules = self.load_custom_rules()
-

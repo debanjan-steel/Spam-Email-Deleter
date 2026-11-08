@@ -12,7 +12,7 @@ protection_flags:
   protect_replied_threads: true
 
 # Senders that are 100% immune from deletion
-protected_senders:
+protected_senders: []
   # Add individual trusted addresses here, e.g.:
   # - family.member@gmail.com
   # - boss@company.com
