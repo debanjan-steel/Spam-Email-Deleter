@@ -635,3 +635,17 @@ with tab_cloud:
             f.write(uploaded.getbuffer())
         st.success("`credentials.json` uploaded and saved successfully! Refreshing...")
         st.rerun()
+
+    st.divider()
+
+    # Embedded Public Privacy Policy for Google OAuth Verification
+    st.subheader("📄 Application Privacy Policy")
+    st.markdown("""
+    **Effective Date:** 2026-11-08  
+    **Application:** Spam Email Deleter (`https://spam-email-deleter.streamlit.app`)
+
+    - **Purpose & Data Use**: This application connects to your Gmail account via official Google OAuth 2.0 solely to identify spam/unsolicited emails and allow you to move them to Trash.
+    - **No External Data Storage**: Your email content, contact lists, and headers are processed securely in your active session and are never sold, transferred, or stored on external advertising servers.
+    - **Security**: Access tokens are kept encrypted. You can revoke access at any time via your Google Account Security settings.
+    - **Contact**: `debanjan17052002@gmail.com`
+    """)
