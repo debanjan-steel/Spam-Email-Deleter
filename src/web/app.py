@@ -102,7 +102,9 @@ st.set_page_config(
 # Inject PWA Manifest & Service Worker for 1-Click App Installation on Mobile & Desktop
 pwa_header_html = """
 <link rel="manifest" href="/app/static/manifest.json">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#FF4B4B">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Spam Deleter">
@@ -117,6 +119,98 @@ pwa_header_html = """
 </script>
 """
 components.html(pwa_header_html, height=0, width=0)
+
+# Inject Mobile & Desktop Responsive Styles
+responsive_css = """
+<style>
+/* Base Viewport & Horizontal Scroll Lock */
+html, body, [data-testid="stAppViewContainer"], .main {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+}
+
+/* Touch-friendly buttons (minimum 44px tap target height) */
+button[data-testid="stBaseButton-primary"],
+button[data-testid="stBaseButton-secondary"] {
+    min-height: 46px !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    touch-action: manipulation !important;
+}
+
+/* Prevent mobile auto-zoom on input focus */
+input, select, textarea {
+    font-size: 16px !important;
+}
+
+/* Horizontally swipeable tabs with touch inertia */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 6px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: thin !important;
+    padding-bottom: 6px !important;
+}
+.stTabs [data-baseweb="tab"] {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    font-size: 0.92rem !important;
+    padding: 8px 14px !important;
+    border-radius: 6px !important;
+}
+
+/* Responsive Rules for Mobile (Android & iPhone <= 768px) */
+@media (max-width: 768px) {
+    /* Maximize horizontal screen real estate */
+    .block-container {
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
+        padding-top: 1rem !important;
+        padding-bottom: 2.5rem !important;
+        max-width: 100% !important;
+    }
+
+    /* Wrap multi-columns naturally on phone */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        gap: 10px !important;
+    }
+    
+    /* Hide empty spacer columns on phone screens */
+    [data-testid="column"]:empty {
+        display: none !important;
+    }
+
+    /* Metric cards: 2 cards per row on mobile */
+    [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > [data-testid="column"] {
+        flex: 1 1 calc(50% - 10px) !important;
+        min-width: 135px !important;
+    }
+    [data-testid="stMetric"] {
+        background: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 10px !important;
+        padding: 10px 12px !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.8rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.35rem !important;
+    }
+
+    /* Ensure tables scroll smoothly within their container without breaking page layout */
+    [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+}
+</style>
+"""
+st.markdown(responsive_css, unsafe_allow_html=True)
 
 # Initialize User Manager for Multi-Tenant Isolation
 user_mgr: UserManager = UserManager()
@@ -501,9 +595,21 @@ with tab_scan:
                 })
 
             df = pd.DataFrame(table_data)
+            column_config = {
+                "Select": st.column_config.CheckboxColumn("🗑️", width="small", help="Select to trash"),
+                "Action": st.column_config.TextColumn("Status", width="small"),
+                "Sender": st.column_config.TextColumn("From", width="medium"),
+                "Subject": st.column_config.TextColumn("Subject", width="large"),
+                "Reason": st.column_config.TextColumn("Reason", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Date": st.column_config.TextColumn("Date", width="small"),
+                "Email": None,      # Hidden visually for mobile compactness
+                "Message ID": None, # Hidden visually for mobile compactness
+            }
             edited_df = st.data_editor(
                 df,
                 disabled=["Action", "Score", "Sender", "Email", "Subject", "Date", "Reason", "Message ID"],
+                column_config=column_config,
                 hide_index=True,
                 use_container_width=True,
                 key="results_editor"
