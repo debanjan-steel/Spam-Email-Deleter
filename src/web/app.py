@@ -2,26 +2,94 @@
 Pure Google App Passwords architecture for seamless, restriction-free Gmail access.
 """
 import sys
+import importlib
 from datetime import datetime
 from pathlib import Path
 import uuid
+import re
+import json
 
 # Ensure repository root is in sys.path
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
+# Force reload local src modules on execution so new methods are never stale in memory
+for mod_name in list(sys.modules.keys()):
+    if mod_name.startswith("src.") or mod_name == "src":
+        try:
+            importlib.reload(sys.modules[mod_name])
+        except Exception:
+            pass
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 
+from src.connectors.imap_connector import GmailImapConnector
+from src.connectors.gmail_connector import EmailMessage, GmailConnector
 from src.auth.gmail_auth import GmailAuthenticator
 from src.config_loader import ConfigManager
-from src.connectors.gmail_connector import EmailMessage
 from src.engine.custom_rules import CustomRulesMatcher
 from src.engine.spam_scorer import ClassificationResult, SpamScorer
 from src.engine.whitelist_guard import WhitelistGuard
 from src.storage.audit_logger import AuditLogger
+
+# Guaranteed fail-safe: Ensure add_app_password_account exists on GmailAuthenticator
+if not hasattr(GmailAuthenticator, "add_app_password_account"):
+    def _add_app_password_account(self, email_address: str, app_password: str):
+        clean_email = email_address.strip().lower()
+        connector = GmailImapConnector(clean_email, app_password)
+        success, err, total_msgs = connector.test_connection()
+
+        if not success:
+            return False, f"Could not connect to Gmail: {err}. Please verify your 16-character App Password."
+
+        filename = f"{self._sanitize_email_for_filename(clean_email)}.json"
+        target_path = self.tokens_dir / filename
+
+        data = {
+            "type": "app_password",
+            "email": clean_email,
+            "app_password": re.sub(r"\s+", "", app_password),
+            "messages_total": total_msgs,
+        }
+        with open(target_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        return True, f"Successfully connected {clean_email}!"
+
+    GmailAuthenticator.add_app_password_account = _add_app_password_account
+
+if not hasattr(GmailAuthenticator, "get_connector_for_account"):
+    def _get_connector_for_account(self, email: str):
+        filename = f"{self._sanitize_email_for_filename(email)}.json"
+        token_path = self.tokens_dir / filename
+
+        if not token_path.exists():
+            raise FileNotFoundError(f"No credentials found for account '{email}'.")
+
+        with open(token_path, "r", encoding="utf-8") as f:
+            content = json.load(f)
+
+        if content.get("type") == "app_password":
+            return GmailImapConnector(content["email"], content["app_password"])
+
+        from src.auth.gmail_auth import SCOPES
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+
+        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(token_path, "w", encoding="utf-8") as f:
+                f.write(creds.to_json())
+
+        service = build("gmail", "v1", credentials=creds)
+        return GmailConnector(service)
+
+    GmailAuthenticator.get_connector_for_account = _get_connector_for_account
 
 st.set_page_config(
     page_title="Gmail Spam Deleter & Guard",
