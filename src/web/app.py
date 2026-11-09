@@ -505,7 +505,7 @@ with st.sidebar:
             total_msgs = active_account_info.get("messages_total", 0)
             col_cnt, col_rf = st.columns([3.5, 1])
             with col_cnt:
-                st.caption(f"📬 Inbox Messages: **{total_msgs:,}**", help="Active message count in your Gmail Inbox. Note: Multi-category scans (Promotions, Social, Purchases, Spam) include emails from those separate folders outside your primary inbox.")
+                st.caption(f"📬 Total Messages (All Categories): **{total_msgs:,}**", help="Live message count across your entire mailbox (Inbox, Promotions, Social, Purchases, Updates, Forums, Spam combined). Matches the exact scope of your scans.")
             with col_rf:
                 if st.button("🔄", key="sidebar_refresh_total_btn", help="Sync latest mailbox count from Gmail"):
                     live_c = auth.refresh_account_messages_total(active_account_email)
@@ -967,7 +967,7 @@ with tab_add_account:
                 col_info, col_status, col_action = st.columns([3, 1.8, 1.5])
                 with col_info:
                     st.markdown(f"**📧 `{acc_email}`**")
-                    st.caption(f"Inbox Messages: **{total_msgs:,}** • Auth: **Google App Password**")
+                    st.caption(f"Total Messages (All Categories): **{total_msgs:,}** • Auth: **Google App Password**")
                 with col_status:
                     if is_active:
                         st.markdown("<span style='color:#00CC96; font-weight:bold;'>🟢 Active Mailbox</span>", unsafe_allow_html=True)

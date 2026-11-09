@@ -55,26 +55,62 @@ class GmailImapConnector:
         return mail
 
     def test_connection(self) -> Tuple[bool, str, int]:
-        """Tests if credentials are valid and returns message count.
+        """Tests if credentials are valid and returns message count for all categories combined.
         
         Returns:
             (success, error_message, total_messages)
         """
         try:
             mail = self._get_connection()
-            status, data = mail.select("INBOX", readonly=True)
-            total = int(data[0].decode()) if status == "OK" else 0
+            total = 0
+            status, data = mail.select('"[Gmail]/All Mail"', readonly=True)
+            if status == "OK" and data and data[0]:
+                total = int(data[0].decode())
+            else:
+                status, data = mail.select("INBOX", readonly=True)
+                if status == "OK" and data and data[0]:
+                    total = int(data[0].decode())
+
+            try:
+                s_status, s_data = mail.select('"[Gmail]/Spam"', readonly=True)
+                if s_status == "OK" and s_data and s_data[0]:
+                    total += int(s_data[0].decode())
+            except Exception:
+                pass
+
             mail.logout()
             return True, "", total
         except Exception as e:
             return False, str(e), 0
 
-    def get_total_messages(self, folder: str = "INBOX") -> int:
-        """Fetches the live message count for the mailbox folder."""
+    def get_total_messages(self, folder: Optional[str] = None) -> int:
+        """Fetches live message count for all categories combined across the entire mailbox."""
         try:
             mail = self._get_connection()
-            status, data = mail.select(folder, readonly=True)
-            total = int(data[0].decode()) if status == "OK" else 0
+            if folder and folder != "INBOX":
+                status, data = mail.select(folder, readonly=True)
+                total = int(data[0].decode()) if status == "OK" and data and data[0] else 0
+                mail.logout()
+                return total
+
+            total = 0
+            # 1. Select [Gmail]/All Mail (covers Inbox, Promotions, Social, Purchases, Updates, Forums)
+            status, data = mail.select('"[Gmail]/All Mail"', readonly=True)
+            if status == "OK" and data and data[0]:
+                total = int(data[0].decode())
+            else:
+                status, data = mail.select("INBOX", readonly=True)
+                if status == "OK" and data and data[0]:
+                    total = int(data[0].decode())
+
+            # 2. Add Spam messages count so all categories combined are included
+            try:
+                s_status, s_data = mail.select('"[Gmail]/Spam"', readonly=True)
+                if s_status == "OK" and s_data and s_data[0]:
+                    total += int(s_data[0].decode())
+            except Exception:
+                pass
+
             mail.logout()
             return total
         except Exception:
