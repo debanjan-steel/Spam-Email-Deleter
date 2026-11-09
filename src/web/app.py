@@ -505,12 +505,16 @@ with st.sidebar:
             total_msgs = active_account_info.get("messages_total", 0)
             st.caption(f"Total Mailbox Messages: {total_msgs:,}")
 
-        if st.button("🗑️ Disconnect This Account", use_container_width=True):
-            auth.remove_account(active_account_email)
-            st.warning(f"Disconnected `{active_account_email}`.")
-            st.session_state.active_account = None
-            st.session_state.scan_results = []
-            st.rerun()
+        with st.popover("🗑️ Delete / Disconnect Mailbox", use_container_width=True):
+            st.markdown(f"**Delete `{active_account_email}`?**")
+            st.caption("This will disconnect this mailbox and delete its saved App Password from your profile. Your emails in Gmail stay completely untouched.")
+            if st.button("Confirm Delete Mailbox", key="sidebar_del_mb_btn", type="primary", use_container_width=True):
+                auth.remove_account(active_account_email)
+                st.warning(f"Deleted connected mailbox `{active_account_email}`.")
+                st.session_state.active_account = None
+                st.session_state.scan_results = []
+                st.session_state.selected_mids = set()
+                st.rerun()
     else:
         st.info("No accounts connected yet. Connect one below!")
 
@@ -523,7 +527,7 @@ with st.sidebar:
 # Main Application Tabs
 tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_settings, tab_policy = st.tabs([
     "🔍 Scan & Clean",
-    "➕ Add Gmail Account",
+    "📬 Mailboxes & Accounts",
     "🎯 Custom Deletion Rules",
     "🛡️ Whitelist & Safeguards",
     "↩️ Audit Log & Undo",
@@ -537,7 +541,7 @@ tab_scan, tab_add_account, tab_rules, tab_whitelist, tab_audit, tab_settings, ta
 with tab_scan:
     if not active_account_email:
         st.header("📬 Connect Your Gmail Account")
-        st.info("No Gmail account is connected yet. Enter your details below or switch to the **➕ Add Gmail Account** tab for step-by-step instructions.")
+        st.info("No Gmail account is connected yet. Enter your details below or switch to the **📬 Mailboxes & Accounts** tab for step-by-step instructions.")
 
         q_email = st.text_input("Gmail Address", placeholder="e.g. yourname@gmail.com", key="quick_acc_email")
         q_pass = st.text_input("16-Character Google App Password", placeholder="e.g. abcd efgh ijkl mnop", type="password", key="quick_acc_pass")
@@ -858,10 +862,68 @@ with tab_scan:
                         st.error(f"Failed to move items to trash: {e}")
 
 # -------------------------------------------------------------
-# TAB 2: ADD GMAIL ACCOUNT (APP PASSWORD ONLY)
+# TAB 2: CONNECTED MAILBOXES & ADD GMAIL ACCOUNT
 # -------------------------------------------------------------
 with tab_add_account:
-    st.header("➕ Connect with Google App Password")
+    st.header("📬 Connected Mailboxes & Accounts")
+    st.markdown(
+        "Manage, switch, or delete your connected Gmail mailboxes, or connect a new Gmail account "
+        "using a secure 16-character Google App Password."
+    )
+
+    st.subheader(f"📋 Your Connected Mailboxes ({len(connected_accounts)})")
+    if connected_accounts:
+        st.caption("The following Gmail mailboxes are connected to your account. You can switch between them or delete any mailbox below.")
+        for idx, acc in enumerate(connected_accounts):
+            acc_email = acc["email"]
+            total_msgs = acc.get("messages_total", 0)
+            is_active = (acc_email == active_account_email)
+
+            with st.container(border=True):
+                col_info, col_status, col_action = st.columns([3, 1.8, 1.5])
+                with col_info:
+                    st.markdown(f"**📧 `{acc_email}`**")
+                    st.caption(f"Total Mailbox Messages: **{total_msgs:,}** • Auth: **Google App Password**")
+                with col_status:
+                    if is_active:
+                        st.markdown("<span style='color:#00CC96; font-weight:bold;'>🟢 Active Mailbox</span>", unsafe_allow_html=True)
+                    else:
+                        if st.button("🔄 Set as Active", key=f"tab2_activate_{acc_email}_{idx}", use_container_width=True):
+                            st.session_state.active_account = acc_email
+                            st.session_state.scan_results = []
+                            st.session_state.selected_mids = set()
+                            st.rerun()
+                with col_action:
+                    with st.popover("🗑️ Delete Mailbox", use_container_width=True):
+                        st.markdown(f"**Delete `{acc_email}`?**")
+                        st.caption("This will disconnect this mailbox and delete its saved App Password from your profile. Your actual Gmail messages will remain completely untouched.")
+                        if st.button("Confirm Delete", key=f"tab2_del_{acc_email}_{idx}", type="primary", use_container_width=True):
+                            auth.remove_account(acc_email)
+                            if st.session_state.active_account == acc_email:
+                                st.session_state.active_account = None
+                                st.session_state.scan_results = []
+                                st.session_state.selected_mids = set()
+                            st.success(f"Deleted connected mailbox `{acc_email}`.")
+                            st.rerun()
+
+        if len(connected_accounts) > 1:
+            st.write("")
+            with st.popover("🚨 Disconnect / Delete All Mailboxes"):
+                st.markdown("**Are you sure you want to delete all connected mailboxes?**")
+                st.caption("All saved Gmail credentials in your private profile will be purged. Your emails in Gmail stay safe.")
+                if st.button("Yes, Delete All Mailboxes", type="primary", key="tab2_del_all_btn"):
+                    auth.remove_all_accounts()
+                    st.session_state.active_account = None
+                    st.session_state.scan_results = []
+                    st.session_state.selected_mids = set()
+                    st.success("All connected mailboxes have been deleted.")
+                    st.rerun()
+    else:
+        st.info("No mailboxes are connected yet. Connect your Gmail account below to start scanning!")
+
+    st.divider()
+
+    st.subheader("➕ Connect with Google App Password")
     st.markdown(
         "Connect any Gmail account instantly using a secure **16-character Google App Password**. "
         "No Google Cloud Console setup, no test users, and zero permissions roadblocks!"
@@ -1201,6 +1263,32 @@ with tab_settings:
                 st.rerun()
             else:
                 st.error(msg)
+
+    st.divider()
+
+    st.subheader("📬 Connected Mailboxes")
+    st.caption("Manage or remove connected Gmail mailboxes associated with your account.")
+    if connected_accounts:
+        for idx, acc in enumerate(connected_accounts):
+            acc_email = acc["email"]
+            total_msgs = acc.get("messages_total", 0)
+            c1, c2 = st.columns([3.5, 1.2])
+            with c1:
+                st.markdown(f"📧 **`{acc_email}`** ({total_msgs:,} messages)")
+            with c2:
+                with st.popover("🗑️ Delete", key=f"sett_del_pop_{acc_email}_{idx}", use_container_width=True):
+                    st.markdown(f"Delete mailbox `{acc_email}`?")
+                    st.caption("Removes saved App Password. Your emails in Gmail stay safe.")
+                    if st.button("Confirm", key=f"sett_del_btn_{acc_email}_{idx}", type="primary", use_container_width=True):
+                        auth.remove_account(acc_email)
+                        if st.session_state.active_account == acc_email:
+                            st.session_state.active_account = None
+                            st.session_state.scan_results = []
+                            st.session_state.selected_mids = set()
+                        st.success(f"Deleted mailbox `{acc_email}`.")
+                        st.rerun()
+    else:
+        st.info("No mailboxes are connected.")
 
     st.divider()
 

@@ -243,10 +243,39 @@ class GmailAuthenticator:
         return email
 
     def remove_account(self, email: str) -> bool:
-        """Disconnects an account by removing its token."""
-        filename = f"{self._sanitize_email_for_filename(email)}.json"
+        """Disconnects and deletes a connected mailbox by removing its stored token file."""
+        if not email:
+            return False
+        clean_email = email.strip().lower()
+        filename = f"{self._sanitize_email_for_filename(clean_email)}.json"
         token_path = self.tokens_dir / filename
+        removed = False
         if token_path.exists():
-            os.remove(token_path)
-            return True
-        return False
+            try:
+                os.remove(token_path)
+                removed = True
+            except Exception:
+                pass
+
+        # Also inspect and clean any other matching token files for this email
+        for tf in list(self.tokens_dir.glob("*.json")):
+            try:
+                with open(tf, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+                if content.get("email", "").strip().lower() == clean_email:
+                    os.remove(tf)
+                    removed = True
+            except Exception:
+                pass
+        return removed
+
+    def remove_all_accounts(self) -> int:
+        """Disconnects and deletes all connected mailboxes by purging stored token files."""
+        count = 0
+        for tf in list(self.tokens_dir.glob("*.json")):
+            try:
+                os.remove(tf)
+                count += 1
+            except Exception:
+                pass
+        return count
