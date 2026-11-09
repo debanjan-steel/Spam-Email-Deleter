@@ -1,7 +1,7 @@
 """Unit tests for the rules engine, whitelist guard, spam scorer, and audit logger.
 """
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import tempfile
 
@@ -27,7 +27,9 @@ def create_sample_message(
     labels: list = None,
     has_list_unsub: bool = True,
     auth_results: str = "spf=pass dkim=pass",
+    date: datetime = None,
 ) -> EmailMessage:
+    msg_date = date or datetime.now(timezone.utc)
     return EmailMessage(
         id=mid,
         thread_id=f"thread_{mid}",
@@ -36,8 +38,8 @@ def create_sample_message(
         sender_domain=sender_domain,
         recipient="user@gmail.com",
         subject=subject,
-        date_str="Sun, 8 Nov 2026 12:00:00 +0000",
-        date=datetime.now(timezone.utc),
+        date_str=msg_date.strftime("%a, %d %b %Y %H:%M:%S +0000"),
+        date=msg_date,
         snippet=snippet,
         labels=labels or ["INBOX"],
         has_list_unsubscribe=has_list_unsub,
@@ -163,10 +165,141 @@ def test_audit_logger_record_and_restore():
         batches_updated = logger.list_batches(account_email="personal@gmail.com")
         assert batches_updated[0]["status"] == "RESTORED"
 
+def test_security_alerts_expiration_active():
+    """Verify that old Google security alerts expire after retention period, while recent ones stay protected."""
+    wl_config = WhitelistConfig(
+        protected_domains=["google.com"],
+        protected_keywords=["verification code", "2fa"]
+    )
+    guard = WhitelistGuard(
+        wl_config,
+        expire_security_alerts=True,
+        security_alerts_retention_days=14
+    )
+    scorer = SpamScorer(
+        guard,
+        CustomRulesMatcher(CustomRulesConfig()),
+        DetectionSettings(expire_old_security_alerts=True, security_alerts_retention_days=14)
+    )
+
+    now = datetime.now(timezone.utc)
+
+    # 1. Recent security alert (3 days old) -> MUST BE PROTECTED
+    recent_alert = create_sample_message(
+        mid="sec_recent_1",
+        sender="Google",
+        sender_email="no-reply@accounts.google.com",
+        sender_domain="google.com",
+        subject="Security alert: New sign-in on Windows",
+        snippet="Your Google Account was just signed in to from a new Windows device.",
+        date=now - timedelta(days=3),
+    )
+    res_recent = scorer.evaluate(recent_alert)
+    assert res_recent.is_protected is True
+    assert res_recent.action == "PROTECTED"
+    assert "Recent security alert" in res_recent.reason
+
+    # 2. Expired security alert (20 days old) -> MUST BE TARGETED_TRASH
+    expired_alert = create_sample_message(
+        mid="sec_expired_1",
+        sender="Google",
+        sender_email="no-reply@accounts.google.com",
+        sender_domain="google.com",
+        subject="Security alert: New sign-in on Windows",
+        snippet="Your Google Account was just signed in to from a new Windows device.",
+        date=now - timedelta(days=20),
+    )
+    res_expired = scorer.evaluate(expired_alert)
+    assert res_expired.is_protected is False
+    assert res_expired.action == "TARGETED_TRASH"
+    assert res_expired.score == 1.0
+    assert "Expired Security Alert" in res_expired.reason
+
+    # 3. Expired security alert that user explicitly STARRED -> MUST REMAIN PROTECTED
+    starred_alert = create_sample_message(
+        mid="sec_starred_1",
+        sender="Google",
+        sender_email="no-reply@accounts.google.com",
+        sender_domain="google.com",
+        subject="Critical security alert",
+        snippet="Suspicious sign-in detected.",
+        is_starred=True,
+        date=now - timedelta(days=25),
+    )
+    res_starred = scorer.evaluate(starred_alert)
+    assert res_starred.is_protected is True
+    assert res_starred.action == "PROTECTED"
+    assert "Starred" in res_starred.reason
+
+def test_security_alerts_google_invoices_protected():
+    """Verify that Google invoices, receipts, and order confirmations NEVER expire or get trashed."""
+    wl_config = WhitelistConfig(
+        protected_domains=["google.com"],
+        protected_keywords=["invoice", "receipt"]
+    )
+    guard = WhitelistGuard(
+        wl_config,
+        expire_security_alerts=True,
+        security_alerts_retention_days=14
+    )
+    scorer = SpamScorer(
+        guard,
+        CustomRulesMatcher(CustomRulesConfig()),
+        DetectionSettings(expire_old_security_alerts=True, security_alerts_retention_days=14)
+    )
+
+    now = datetime.now(timezone.utc)
+
+    # Old Google Workspace invoice (45 days old)
+    invoice_msg = create_sample_message(
+        mid="inv_001",
+        sender="Google Cloud",
+        sender_email="payments-noreply@google.com",
+        sender_domain="google.com",
+        subject="Your Google Workspace monthly invoice is available",
+        snippet="View your invoice and billing summary for the period.",
+        date=now - timedelta(days=45),
+    )
+    res_inv = scorer.evaluate(invoice_msg)
+    assert res_inv.is_protected is True
+    assert res_inv.action == "PROTECTED"
+
+def test_security_alerts_auto_expire_disabled():
+    """Verify that when auto-expiration is disabled, Google security alerts remain protected by domain whitelist."""
+    wl_config = WhitelistConfig(protected_domains=["google.com"])
+    guard = WhitelistGuard(
+        wl_config,
+        expire_security_alerts=False,
+        security_alerts_retention_days=14
+    )
+    scorer = SpamScorer(
+        guard,
+        CustomRulesMatcher(CustomRulesConfig()),
+        DetectionSettings(expire_old_security_alerts=False, security_alerts_retention_days=14)
+    )
+
+    now = datetime.now(timezone.utc)
+    old_alert = create_sample_message(
+        mid="sec_disabled_1",
+        sender="Google",
+        sender_email="no-reply@accounts.google.com",
+        sender_domain="google.com",
+        subject="Security alert: New sign-in on Windows",
+        snippet="Your Google Account was signed in.",
+        date=now - timedelta(days=25),
+    )
+    res = scorer.evaluate(old_alert)
+    assert res.is_protected is True
+    assert res.action == "PROTECTED"
+    assert "google.com" in res.reason
+
 if __name__ == "__main__":
     test_whitelist_protection_keywords()
     test_whitelist_starred_immunity()
     test_custom_rules_matching()
     test_pipeline_precedence_whitelist_overrules_blacklist()
     test_audit_logger_record_and_restore()
-    print("All 6 tests passed successfully (including multi-account audit)!")
+    test_security_alerts_expiration_active()
+    test_security_alerts_google_invoices_protected()
+    test_security_alerts_auto_expire_disabled()
+    print("All engine and security alert tests passed successfully!")

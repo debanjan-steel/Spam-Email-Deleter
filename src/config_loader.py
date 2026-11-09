@@ -20,6 +20,8 @@ class DetectionSettings(BaseModel):
     check_unsubscribe_header: bool = True
     use_ai_fallback: bool = False
     ai_model: str = "gemini-2.5-flash"
+    expire_old_security_alerts: bool = True
+    security_alerts_retention_days: int = 14
 
 class StorageSettings(BaseModel):
     audit_db_path: str = "audit_log.db"

@@ -668,7 +668,11 @@ with tab_scan:
         if btn_scan:
             try:
                 connector = auth.get_connector_for_account(active_account_email)
-                whitelist_guard = WhitelistGuard(config_mgr.whitelist)
+                whitelist_guard = WhitelistGuard(
+                    config_mgr.whitelist,
+                    expire_security_alerts=config_mgr.app_config.detection.expire_old_security_alerts,
+                    security_alerts_retention_days=config_mgr.app_config.detection.security_alerts_retention_days,
+                )
                 custom_rules = CustomRulesMatcher(config_mgr.custom_rules)
                 scorer = SpamScorer(whitelist_guard, custom_rules, config_mgr.app_config.detection)
 
@@ -1125,6 +1129,42 @@ with tab_whitelist:
         wl.protection_flags.protect_important = new_imp
         config_mgr.save_whitelist(wl)
         st.success("Updated protection flags!")
+
+    st.divider()
+
+    st.subheader("⏱️ Ephemeral Security Alerts Lifecycle")
+    st.caption(
+        "Automated sign-in notices and security alerts (from Google, Microsoft, Apple, GitHub) are critical when recent, "
+        "but become obsolete inbox clutter over time. When enabled, alerts older than your chosen safety window will be automatically flagged for cleanup even if the sender domain is whitelisted."
+    )
+    col_s1, col_s2 = st.columns([2, 1])
+    with col_s1:
+        new_expire = st.checkbox(
+            "Auto-expire and trash old security/login alert emails",
+            value=config_mgr.app_config.detection.expire_old_security_alerts,
+            help="When checked, security alerts older than the safety retention period are sent to Trash. Recent alerts remain 100% protected."
+        )
+    with col_s2:
+        retention_options = [7, 14, 21, 30]
+        current_retention = config_mgr.app_config.detection.security_alerts_retention_days
+        curr_idx = retention_options.index(current_retention) if current_retention in retention_options else 1
+        new_retention = st.selectbox(
+            "Safety Retention Window",
+            options=retention_options,
+            index=curr_idx,
+            format_func=lambda x: f"{x} days ({'Recommended' if x == 14 else 'Aggressive' if x == 7 else 'Extended'})",
+            disabled=not new_expire,
+            help="14 days is recommended: provides a safe 2-week buffer for travel and holidays, while Google keeps its online activity log for 28 days."
+        )
+
+    if (
+        new_expire != config_mgr.app_config.detection.expire_old_security_alerts
+        or new_retention != config_mgr.app_config.detection.security_alerts_retention_days
+    ):
+        config_mgr.app_config.detection.expire_old_security_alerts = new_expire
+        config_mgr.app_config.detection.security_alerts_retention_days = new_retention
+        config_mgr.save_app_config(config_mgr.app_config)
+        st.success("Updated security alerts lifecycle settings!")
 
     st.divider()
 

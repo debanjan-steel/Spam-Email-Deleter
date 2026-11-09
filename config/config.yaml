@@ -24,6 +24,10 @@ detection:
   # Flag emails containing List-Unsubscribe bulk marketing headers
   check_unsubscribe_header: true
   
+  # Ephemeral Security Alerts Expiration (e.g. Google sign-in and security notices)
+  expire_old_security_alerts: true
+  security_alerts_retention_days: 14
+  
   # Use Google Gemini AI for ambiguous/borderline emails
   use_ai_fallback: false
   ai_model: "gemini-2.5-flash"
