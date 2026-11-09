@@ -505,7 +505,7 @@ with st.sidebar:
             total_msgs = active_account_info.get("messages_total", 0)
             col_cnt, col_rf = st.columns([3.5, 1])
             with col_cnt:
-                st.caption(f"Total Mailbox Messages: **{total_msgs:,}**")
+                st.caption(f"📬 Inbox Messages: **{total_msgs:,}**", help="Active message count in your Gmail Inbox. Note: Multi-category scans (Promotions, Social, Purchases, Spam) include emails from those separate folders outside your primary inbox.")
             with col_rf:
                 if st.button("🔄", key="sidebar_refresh_total_btn", help="Sync latest mailbox count from Gmail"):
                     live_c = auth.refresh_account_messages_total(active_account_email)
@@ -912,18 +912,22 @@ with tab_scan:
                                 account_email=active_account_email,
                                 action_type="TRASH"
                             )
-                            # Update and live-sync mailbox total
-                            current_tot = active_account_info.get("messages_total", 0) if active_account_info else 0
-                            new_tot = max(0, current_tot - len(trashed_results))
-                            auth.update_account_messages_total(active_account_email, new_tot)
-                            if active_account_info:
-                                active_account_info["messages_total"] = new_tot
+                            # Live-sync mailbox total directly from Gmail first (prevents misleading temporary local math flash)
+                            synced = False
                             try:
                                 live_c = auth.refresh_account_messages_total(active_account_email)
                                 if live_c > 0 and active_account_info:
                                     active_account_info["messages_total"] = live_c
+                                    synced = True
                             except Exception:
                                 pass
+
+                            if not synced:
+                                current_tot = active_account_info.get("messages_total", 0) if active_account_info else 0
+                                new_tot = max(0, current_tot - len(trashed_results))
+                                auth.update_account_messages_total(active_account_email, new_tot)
+                                if active_account_info:
+                                    active_account_info["messages_total"] = new_tot
 
                             st.session_state.trash_action_banner = (
                                 f"🎉 Successfully moved {len(trashed_results):,} emails to Trash in `{active_account_email}`! "
@@ -963,7 +967,7 @@ with tab_add_account:
                 col_info, col_status, col_action = st.columns([3, 1.8, 1.5])
                 with col_info:
                     st.markdown(f"**📧 `{acc_email}`**")
-                    st.caption(f"Total Mailbox Messages: **{total_msgs:,}** • Auth: **Google App Password**")
+                    st.caption(f"Inbox Messages: **{total_msgs:,}** • Auth: **Google App Password**")
                 with col_status:
                     if is_active:
                         st.markdown("<span style='color:#00CC96; font-weight:bold;'>🟢 Active Mailbox</span>", unsafe_allow_html=True)
