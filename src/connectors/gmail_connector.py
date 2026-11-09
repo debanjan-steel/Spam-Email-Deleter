@@ -34,6 +34,14 @@ class GmailConnector:
     def __init__(self, service: Resource):
         self.service = service
 
+    def get_total_messages(self) -> int:
+        """Fetches live message count for the user's Gmail profile."""
+        try:
+            profile = self.service.users().getProfile(userId="me").execute()
+            return profile.get("messagesTotal", 0)
+        except Exception:
+            return 0
+
     def parse_sender(self, from_header: str) -> tuple[str, str, str]:
         """Extracts (name, email_address, domain) from a From header."""
         name, address = email.utils.parseaddr(from_header)

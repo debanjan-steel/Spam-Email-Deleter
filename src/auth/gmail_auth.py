@@ -193,6 +193,35 @@ class GmailAuthenticator:
         service = build("gmail", "v1", credentials=creds)
         return GmailConnector(service)
 
+    def update_account_messages_total(self, email: str, new_total: int) -> None:
+        """Updates stored messages_total on disk for the given account."""
+        filename = f"{self._sanitize_email_for_filename(email)}.json"
+        token_path = self.tokens_dir / filename
+        if token_path.exists():
+            try:
+                with open(token_path, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+                content["messages_total"] = max(0, new_total)
+                with open(token_path, "w", encoding="utf-8") as f:
+                    json.dump(content, f, indent=2)
+            except Exception:
+                pass
+
+    def refresh_account_messages_total(self, email: str) -> int:
+        """Connects to the mailbox, queries the live message count, updates disk cache, and returns count."""
+        try:
+            connector = self.get_connector_for_account(email)
+            total = 0
+            if hasattr(connector, "get_total_messages"):
+                total = connector.get_total_messages()
+            elif hasattr(connector, "test_connection"):
+                _, _, total = connector.test_connection()
+            if total > 0:
+                self.update_account_messages_total(email, total)
+            return total
+        except Exception:
+            return 0
+
     def get_authorization_url(self, redirect_uri: str) -> Tuple[str, str]:
         """Generates Google OAuth consent URL for web & mobile browsers."""
         config = self.get_client_config()

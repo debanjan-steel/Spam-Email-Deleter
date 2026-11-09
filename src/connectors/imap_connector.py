@@ -69,6 +69,17 @@ class GmailImapConnector:
         except Exception as e:
             return False, str(e), 0
 
+    def get_total_messages(self, folder: str = "INBOX") -> int:
+        """Fetches the live message count for the mailbox folder."""
+        try:
+            mail = self._get_connection()
+            status, data = mail.select(folder, readonly=True)
+            total = int(data[0].decode()) if status == "OK" else 0
+            mail.logout()
+            return total
+        except Exception:
+            return 0
+
     def _decode_str(self, header_value: Optional[str]) -> str:
         """Decodes RFC 2047 encoded email header strings."""
         if not header_value:

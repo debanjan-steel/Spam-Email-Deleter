@@ -3,7 +3,7 @@ Includes expiration rules for ephemeral security and sign-in alert notices.
 """
 from datetime import datetime, timezone
 import email.utils
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from src.config_loader import WhitelistConfig
 from src.connectors.gmail_connector import EmailMessage
 
@@ -185,6 +185,76 @@ def is_security_alert(message: EmailMessage) -> bool:
 
     return False
 
+# Social media notification domains
+SOCIAL_DOMAINS = [
+    "facebookmail.com", "instagram.com", "twitter.com", "x.com",
+    "linkedin.com", "tiktok.com", "pinterest.com", "reddit.com",
+    "threads.net", "snapchat.com", "youtube.com", "quora.com",
+    "medium.com", "tumblr.com", "twitch.tv"
+]
+
+# Purchase and order confirmation keywords
+PURCHASE_PHRASES = [
+    "order confirmation", "order confirmed", "your order of", "your order #",
+    "order #", "order receipt", "purchase receipt", "receipt for your purchase",
+    "your purchase of", "payment confirmation", "payment received",
+    "shipment update", "shipped", "tracking number", "track your package",
+    "out for delivery", "package delivered", "delivered today", "delivered to your",
+    "delivery confirmation", "shipping confirmation", "item dispatched",
+    "order status", "your amazon.com order", "your ebay order"
+]
+
+# Critical financial, invoice, and legal documents that must NEVER be auto-expired under purchases
+FINANCIAL_TAX_EXCLUSIONS = [
+    "invoice", "tax form", "tax document", "1099", "w-2", "w2", "bank statement",
+    "salary", "paystub", "payroll", "legal notice", "court", "subpoena",
+    "insurance policy", "mortgage", "loan statement"
+]
+
+def get_message_ephemeral_category(message: EmailMessage) -> Optional[str]:
+    """Determines if a message belongs to an ephemeral category: 'promotions', 'social', or 'purchases'.
+    
+    Excludes critical financial and legal documents (e.g. tax documents, bank statements).
+    """
+    subject_lower = (message.subject or "").lower()
+    snippet_lower = (message.snippet or "").lower()
+    content_lower = f"{subject_lower} {snippet_lower}"
+    sender_lower = (message.sender_email or "").lower()
+    domain_lower = (message.sender_domain or "").lower()
+
+    # Never treat tax documents, bank statements, or payroll as ephemeral
+    for excl in FINANCIAL_TAX_EXCLUSIONS:
+        if excl in content_lower:
+            return None
+
+    # 1. Check direct Gmail labels
+    msg_labels = [str(l).upper() for l in (message.labels or [])]
+    for lbl in msg_labels:
+        if "PROMOTION" in lbl:
+            return "promotions"
+        if "SOCIAL" in lbl:
+            return "social"
+        if "PURCHASE" in lbl:
+            return "purchases"
+
+    # 2. Social network domains
+    if any(s_dom in domain_lower or s_dom in sender_lower for s_dom in SOCIAL_DOMAINS):
+        return "social"
+
+    # 3. Purchases / Orders
+    if any(phrase in content_lower for phrase in PURCHASE_PHRASES):
+        return "purchases"
+
+    # 4. Promotional indicators (List-Unsubscribe header or strong marketing keywords)
+    if message.has_list_unsubscribe:
+        return "promotions"
+
+    for promo_kw in ["sale", "% off", "discount", "special offer", "newsletter", "weekly digest", "deal of the day"]:
+        if promo_kw in subject_lower:
+            return "promotions"
+
+    return None
+
 def get_message_age_days(message: EmailMessage) -> Optional[float]:
     """Calculates email age in fractional days from current UTC time."""
     msg_date = message.date
@@ -214,10 +284,16 @@ class WhitelistGuard:
         config: WhitelistConfig,
         expire_security_alerts: bool = True,
         security_alerts_retention_days: int = 14,
+        expire_categories: bool = True,
+        categories_retention_days: int = 14,
+        expired_categories: Optional[List[str]] = None,
     ):
         self.config = config
         self.expire_security_alerts = expire_security_alerts
         self.security_alerts_retention_days = security_alerts_retention_days
+        self.expire_categories = expire_categories
+        self.categories_retention_days = categories_retention_days
+        self.expired_categories = expired_categories or ["promotions", "social", "purchases"]
         self._normalize()
 
     def _normalize(self) -> None:
@@ -255,6 +331,20 @@ class WhitelistGuard:
                 provider = get_alert_provider_name(message)
                 age_str = f"{int(age_days)}d old" if age_days is not None else "recent"
                 return True, f"Protected: Recent {provider} sign-in alert ({age_str}, within {self.security_alerts_retention_days}-day safety window)"
+
+        # Special Safeguard: Ephemeral Category Expiration (Promotion, Social, Purchases)
+        # Promotional newsletters, social updates, and purchases/order notifications
+        # are kept for the retention period (14 days) and expire thereafter.
+        if self.expire_categories:
+            cat = get_message_ephemeral_category(message)
+            if cat and cat in self.expired_categories:
+                age_days = get_message_age_days(message)
+                if age_days is not None and age_days > self.categories_retention_days:
+                    # Expired category email: Intentionally NOT protected by domain whitelist!
+                    return False, ""
+                else:
+                    age_str = f"{int(age_days)}d old" if age_days is not None else "recent"
+                    return True, f"Protected: Recent {cat.capitalize()} email ({age_str}, within {self.categories_retention_days}-day safety window)"
 
         # 2. Important label check
         if flags.protect_important and message.is_important:

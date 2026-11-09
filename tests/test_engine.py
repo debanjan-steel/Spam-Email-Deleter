@@ -25,7 +25,7 @@ def create_sample_message(
     is_starred: bool = False,
     is_important: bool = False,
     labels: list = None,
-    has_list_unsub: bool = True,
+    has_list_unsub: bool = False,
     auth_results: str = "spf=pass dkim=pass",
     date: datetime = None,
 ) -> EmailMessage:
@@ -52,7 +52,7 @@ def test_whitelist_protection_keywords():
     wl_config = WhitelistConfig(
         protected_keywords=["2fa", "verification code", "receipt", "order confirmation"]
     )
-    guard = WhitelistGuard(wl_config)
+    guard = WhitelistGuard(wl_config, expire_security_alerts=False, expire_categories=False)
 
     # 1. Message with 2FA should be protected
     msg_2fa = create_sample_message(
@@ -258,6 +258,7 @@ def test_security_alerts_google_invoices_protected():
         sender_domain="google.com",
         subject="Your Google Workspace monthly invoice is available",
         snippet="View your invoice and billing summary for the period.",
+        has_list_unsub=False,
         date=now - timedelta(days=45),
     )
     res_inv = scorer.evaluate(invoice_msg)
@@ -403,6 +404,162 @@ def test_github_and_multiplatform_login_alerts_expiration():
     assert res_discord.action == "TARGETED_TRASH"
     assert "Discord" in res_discord.reason
 
+def test_category_expiration_promotions_social_purchases():
+    """Verify that emails in Promotions, Social, and Purchases are kept for 14 days and then trashed."""
+    wl_config = WhitelistConfig(
+        protected_domains=["google.com", "amazon.com", "linkedin.com"],
+        protected_keywords=["receipt", "order confirmation"]
+    )
+    guard = WhitelistGuard(
+        wl_config,
+        expire_categories=True,
+        categories_retention_days=14,
+        expired_categories=["promotions", "social", "purchases"]
+    )
+    scorer = SpamScorer(
+        guard,
+        CustomRulesMatcher(CustomRulesConfig()),
+        DetectionSettings(
+            expire_old_categories=True,
+            categories_retention_days=14,
+            expired_categories=["promotions", "social", "purchases"]
+        )
+    )
+
+    now = datetime.now(timezone.utc)
+
+    # 1. Recent Promotion (5 days old) -> MUST BE PROTECTED
+    promo_recent = create_sample_message(
+        mid="promo_recent_1",
+        sender="Nike Store",
+        sender_email="news@nike.com",
+        sender_domain="nike.com",
+        subject="Exclusive Weekend Sale: 30% off sneakers",
+        snippet="Check out our latest flash sale",
+        labels=["CATEGORY_PROMOTIONS"],
+        has_list_unsub=True,
+        date=now - timedelta(days=5),
+    )
+    res_promo_recent = scorer.evaluate(promo_recent)
+    assert res_promo_recent.is_protected is True
+    assert res_promo_recent.action == "PROTECTED"
+    assert "Promotions" in res_promo_recent.reason
+
+    # 2. Expired Promotion (25 days old) -> MUST BE TARGETED_TRASH
+    promo_old = create_sample_message(
+        mid="promo_old_1",
+        sender="Nike Store",
+        sender_email="news@nike.com",
+        sender_domain="nike.com",
+        subject="Exclusive Weekend Sale: 30% off sneakers",
+        snippet="Check out our latest flash sale",
+        labels=["CATEGORY_PROMOTIONS"],
+        has_list_unsub=True,
+        date=now - timedelta(days=25),
+    )
+    res_promo_old = scorer.evaluate(promo_old)
+    assert res_promo_old.is_protected is False
+    assert res_promo_old.action == "TARGETED_TRASH"
+    assert res_promo_old.score == 1.0
+    assert "Promotions" in res_promo_old.reason
+
+    # 3. Recent Social update (3 days old) -> MUST BE PROTECTED
+    social_recent = create_sample_message(
+        mid="social_recent_1",
+        sender="LinkedIn",
+        sender_email="updates@linkedin.com",
+        sender_domain="linkedin.com",
+        subject="You have 3 new notifications on LinkedIn",
+        snippet="See who viewed your profile",
+        labels=["CATEGORY_SOCIAL"],
+        date=now - timedelta(days=3),
+    )
+    res_social_recent = scorer.evaluate(social_recent)
+    assert res_social_recent.is_protected is True
+    assert res_social_recent.action == "PROTECTED"
+    assert "Social" in res_social_recent.reason
+
+    # 4. Expired Social update (21 days old) -> MUST BE TARGETED_TRASH
+    social_old = create_sample_message(
+        mid="social_old_1",
+        sender="LinkedIn",
+        sender_email="updates@linkedin.com",
+        sender_domain="linkedin.com",
+        subject="You have 3 new notifications on LinkedIn",
+        snippet="See who viewed your profile",
+        labels=["CATEGORY_SOCIAL"],
+        date=now - timedelta(days=21),
+    )
+    res_social_old = scorer.evaluate(social_old)
+    assert res_social_old.is_protected is False
+    assert res_social_old.action == "TARGETED_TRASH"
+    assert res_social_old.score == 1.0
+    assert "Social" in res_social_old.reason
+
+    # 5. Recent Purchase order update (6 days old) -> MUST BE PROTECTED
+    purchase_recent = create_sample_message(
+        mid="purch_recent_1",
+        sender="Amazon.com",
+        sender_email="auto-confirm@amazon.com",
+        sender_domain="amazon.com",
+        subject="Your Amazon.com order #102-392019 has shipped",
+        snippet="Track your package for your order",
+        labels=["CATEGORY_PURCHASES"],
+        date=now - timedelta(days=6),
+    )
+    res_purch_recent = scorer.evaluate(purchase_recent)
+    assert res_purch_recent.is_protected is True
+    assert res_purch_recent.action == "PROTECTED"
+    assert "Purchases" in res_purch_recent.reason
+
+    # 6. Expired Purchase order update (30 days old) -> MUST BE TARGETED_TRASH
+    purchase_old = create_sample_message(
+        mid="purch_old_1",
+        sender="Amazon.com",
+        sender_email="auto-confirm@amazon.com",
+        sender_domain="amazon.com",
+        subject="Your Amazon.com order #102-392019 has shipped",
+        snippet="Track your package for your order",
+        labels=["CATEGORY_PURCHASES"],
+        date=now - timedelta(days=30),
+    )
+    res_purch_old = scorer.evaluate(purchase_old)
+    assert res_purch_old.is_protected is False
+    assert res_purch_old.action == "TARGETED_TRASH"
+    assert res_purch_old.score == 1.0
+    assert "Purchases" in res_purch_old.reason
+
+    # 7. Starred purchase email (40 days old) -> MUST REMAIN PROTECTED
+    purchase_starred = create_sample_message(
+        mid="purch_starred_1",
+        sender="Amazon.com",
+        sender_email="auto-confirm@amazon.com",
+        sender_domain="amazon.com",
+        subject="Your Amazon.com order confirmation",
+        snippet="Order details",
+        is_starred=True,
+        labels=["CATEGORY_PURCHASES"],
+        date=now - timedelta(days=40),
+    )
+    res_starred = scorer.evaluate(purchase_starred)
+    assert res_starred.is_protected is True
+    assert res_starred.action == "PROTECTED"
+
+    # 8. Tax form / bank statement (50 days old) -> MUST REMAIN PROTECTED (Exempt)
+    bank_doc = create_sample_message(
+        mid="bank_doc_1",
+        sender="Bank",
+        sender_email="statements@mybank.com",
+        sender_domain="mybank.com",
+        subject="Your annual 1099 tax form and bank statement",
+        snippet="Download your official tax document",
+        labels=["CATEGORY_PURCHASES"],
+        date=now - timedelta(days=50),
+    )
+    res_bank = scorer.evaluate(bank_doc)
+    assert res_bank.is_protected is False or res_bank.action != "TARGETED_TRASH"
+    assert "Expired Category" not in res_bank.reason
+
 if __name__ == "__main__":
     test_whitelist_protection_keywords()
     test_whitelist_starred_immunity()
@@ -413,4 +570,5 @@ if __name__ == "__main__":
     test_security_alerts_google_invoices_protected()
     test_security_alerts_auto_expire_disabled()
     test_github_and_multiplatform_login_alerts_expiration()
-    print("All engine and multiplatform security alert tests passed successfully!")
+    test_category_expiration_promotions_social_purchases()
+    print("All engine, security alert, and category lifecycle tests passed successfully!")

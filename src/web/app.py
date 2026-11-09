@@ -503,7 +503,15 @@ with st.sidebar:
         if active_account_info:
             st.success(f"**Connected**: `{active_account_email}`")
             total_msgs = active_account_info.get("messages_total", 0)
-            st.caption(f"Total Mailbox Messages: {total_msgs:,}")
+            col_cnt, col_rf = st.columns([3.5, 1])
+            with col_cnt:
+                st.caption(f"Total Mailbox Messages: **{total_msgs:,}**")
+            with col_rf:
+                if st.button("🔄", key="sidebar_refresh_total_btn", help="Sync latest mailbox count from Gmail"):
+                    live_c = auth.refresh_account_messages_total(active_account_email)
+                    if live_c > 0:
+                        active_account_info["messages_total"] = live_c
+                    st.rerun()
 
         with st.popover("🗑️ Delete / Disconnect Mailbox", use_container_width=True):
             st.markdown(f"**Delete `{active_account_email}`?**")
@@ -672,11 +680,15 @@ with tab_scan:
                     config_mgr.whitelist,
                     expire_security_alerts=config_mgr.app_config.detection.expire_old_security_alerts,
                     security_alerts_retention_days=config_mgr.app_config.detection.security_alerts_retention_days,
+                    expire_categories=config_mgr.app_config.detection.expire_old_categories,
+                    categories_retention_days=config_mgr.app_config.detection.categories_retention_days,
+                    expired_categories=config_mgr.app_config.detection.expired_categories,
                 )
                 custom_rules = CustomRulesMatcher(config_mgr.custom_rules)
                 scorer = SpamScorer(whitelist_guard, custom_rules, config_mgr.app_config.detection)
 
                 all_mids = []
+                mid_to_category = {}
                 with st.spinner(f"Discovering message IDs from {active_account_email}..."):
                     if folders_to_scan:
                         # Dynamically fill quota across selected categories until max_emails limit is satisfied
@@ -690,6 +702,9 @@ with tab_scan:
                                 label_ids=[label],
                                 max_results=remaining_needed,
                             )
+                            for m in mids:
+                                if m not in mid_to_category:
+                                    mid_to_category[m] = label
                             all_mids.extend(mids)
                     else:
                         all_mids = connector.list_message_ids(
@@ -708,8 +723,28 @@ with tab_scan:
                         scan_progress.progress(pct, text=f"Analyzing emails: {done:,} of {total:,} ({int(pct*100)}%)...")
 
                     messages = connector.get_messages_batch(unique_mids, progress_callback=on_scan_progress)
+
+                    # Tag scanned category labels onto messages
+                    for m in messages:
+                        if m.id in mid_to_category:
+                            cat_label = mid_to_category[m.id].lower()
+                            if "promotion" in cat_label and "CATEGORY_PROMOTIONS" not in m.labels:
+                                m.labels.append("CATEGORY_PROMOTIONS")
+                            elif "social" in cat_label and "CATEGORY_SOCIAL" not in m.labels:
+                                m.labels.append("CATEGORY_SOCIAL")
+                            elif "purchase" in cat_label and "CATEGORY_PURCHASES" not in m.labels:
+                                m.labels.append("CATEGORY_PURCHASES")
+
                     results = [scorer.evaluate(m) for m in messages]
                     scan_progress.empty()
+
+                    # Live sync the current total messages in mailbox
+                    try:
+                        live_c = auth.refresh_account_messages_total(active_account_email)
+                        if live_c > 0 and active_account_info:
+                            active_account_info["messages_total"] = live_c
+                    except Exception:
+                        pass
 
                     st.session_state.scan_results = results
                     st.session_state.selected_mids = {
@@ -877,6 +912,19 @@ with tab_scan:
                                 account_email=active_account_email,
                                 action_type="TRASH"
                             )
+                            # Update and live-sync mailbox total
+                            current_tot = active_account_info.get("messages_total", 0) if active_account_info else 0
+                            new_tot = max(0, current_tot - len(trashed_results))
+                            auth.update_account_messages_total(active_account_email, new_tot)
+                            if active_account_info:
+                                active_account_info["messages_total"] = new_tot
+                            try:
+                                live_c = auth.refresh_account_messages_total(active_account_email)
+                                if live_c > 0 and active_account_info:
+                                    active_account_info["messages_total"] = live_c
+                            except Exception:
+                                pass
+
                             st.session_state.trash_action_banner = (
                                 f"🎉 Successfully moved {len(trashed_results):,} emails to Trash in `{active_account_email}`! "
                                 f"(Batch ID: `{batch_id}`). You can review or restore them anytime in the 'Audit Log & Undo' tab."
@@ -1165,6 +1213,64 @@ with tab_whitelist:
         config_mgr.app_config.detection.security_alerts_retention_days = new_retention
         config_mgr.save_app_config(config_mgr.app_config)
         st.success("Updated security alerts lifecycle settings!")
+
+    st.divider()
+
+    st.subheader("🛍️ Ephemeral Categories Lifecycle (Promotions, Social & Purchases)")
+    st.caption(
+        "Promotional marketing emails, social network updates, and purchase/order delivery notifications are kept for 14 days. "
+        "After the 14-day retention period, they are automatically flagged for cleanup. Starred emails remain 100% immune forever."
+    )
+    col_c1, col_c2 = st.columns([2, 1])
+    with col_c1:
+        new_cat_expire = st.checkbox(
+            "Auto-expire and trash old Promotion, Social, and Purchase emails",
+            value=config_mgr.app_config.detection.expire_old_categories,
+            help="When checked, emails in Promotions, Social, or Purchases older than the retention period are sent to Trash. Recent ones remain protected."
+        )
+    with col_c2:
+        cat_retention_options = [7, 14, 21, 30]
+        curr_cat_ret = config_mgr.app_config.detection.categories_retention_days
+        curr_cat_idx = cat_retention_options.index(curr_cat_ret) if curr_cat_ret in cat_retention_options else 1
+        new_cat_retention = st.selectbox(
+            "Category Retention Window",
+            options=cat_retention_options,
+            index=curr_cat_idx,
+            format_func=lambda x: f"{x} days ({'Recommended' if x == 14 else 'Aggressive' if x == 7 else 'Extended'})",
+            disabled=not new_cat_expire,
+            key="cat_retention_selectbox",
+            help="14 days is recommended: keeps recent receipts, order tracking, and social notices active while clearing old marketing clutter."
+        )
+
+    # Category selector checkboxes
+    st.caption("Active Categories for Expiration:")
+    ch_c1, ch_c2, ch_c3 = st.columns(3)
+    curr_cats = config_mgr.app_config.detection.expired_categories
+    with ch_c1:
+        exp_promo = st.checkbox("🏷️ Promotions", value=("promotions" in curr_cats), disabled=not new_cat_expire)
+    with ch_c2:
+        exp_social = st.checkbox("👥 Social", value=("social" in curr_cats), disabled=not new_cat_expire)
+    with ch_c3:
+        exp_purchases = st.checkbox("🛍️ Purchases", value=("purchases" in curr_cats), disabled=not new_cat_expire)
+
+    updated_cats = []
+    if exp_promo:
+        updated_cats.append("promotions")
+    if exp_social:
+        updated_cats.append("social")
+    if exp_purchases:
+        updated_cats.append("purchases")
+
+    if (
+        new_cat_expire != config_mgr.app_config.detection.expire_old_categories
+        or new_cat_retention != config_mgr.app_config.detection.categories_retention_days
+        or updated_cats != curr_cats
+    ):
+        config_mgr.app_config.detection.expire_old_categories = new_cat_expire
+        config_mgr.app_config.detection.categories_retention_days = new_cat_retention
+        config_mgr.app_config.detection.expired_categories = updated_cats
+        config_mgr.save_app_config(config_mgr.app_config)
+        st.success("Updated category lifecycle settings!")
 
     st.divider()
 
