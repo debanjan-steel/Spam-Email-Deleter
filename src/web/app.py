@@ -1132,17 +1132,17 @@ with tab_whitelist:
 
     st.divider()
 
-    st.subheader("⏱️ Ephemeral Security Alerts Lifecycle")
+    st.subheader("⏱️ Ephemeral Security & Sign-In Alerts Lifecycle")
     st.caption(
-        "Automated sign-in notices and security alerts (from Google, Microsoft, Apple, GitHub) are critical when recent, "
-        "but become obsolete inbox clutter over time. When enabled, alerts older than your chosen safety window will be automatically flagged for cleanup even if the sender domain is whitelisted."
+        "Automated sign-in notices and login alerts (from GitHub, Google, Microsoft, Apple, Steam, Discord, etc.) are critical when recent, "
+        "but become obsolete inbox clutter over time. When enabled, login notifications older than your chosen safety window will be automatically flagged for cleanup even if the provider domain is whitelisted."
     )
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
         new_expire = st.checkbox(
-            "Auto-expire and trash old security/login alert emails",
+            "Auto-expire and trash old login & security alert emails",
             value=config_mgr.app_config.detection.expire_old_security_alerts,
-            help="When checked, security alerts older than the safety retention period are sent to Trash. Recent alerts remain 100% protected."
+            help="When checked, sign-in alerts (GitHub, Google, Microsoft, Apple, etc.) older than the safety retention period are sent to Trash. Recent alerts remain 100% protected."
         )
     with col_s2:
         retention_options = [7, 14, 21, 30]

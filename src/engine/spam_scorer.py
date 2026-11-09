@@ -7,7 +7,12 @@ from typing import List, Optional
 from src.config_loader import DetectionSettings
 from src.connectors.gmail_connector import EmailMessage
 from src.engine.custom_rules import CustomRulesMatcher
-from src.engine.whitelist_guard import WhitelistGuard, get_message_age_days, is_security_alert
+from src.engine.whitelist_guard import (
+    WhitelistGuard,
+    get_alert_provider_name,
+    get_message_age_days,
+    is_security_alert,
+)
 
 @dataclass
 class ClassificationResult:
@@ -66,12 +71,13 @@ class SpamScorer:
                 labels=message.labels,
             )
 
-        # Special Rule: Ephemeral Security Alerts Expiration
-        # Google sign-in and security notifications older than the retention threshold
-        # are targeted for cleanup.
+        # Special Rule: Ephemeral Security & Sign-In Alerts Expiration
+        # Automated login notices and security alerts (from GitHub, Google, Microsoft, Apple, etc.)
+        # older than the retention threshold are targeted for cleanup.
         if self.settings.expire_old_security_alerts and is_security_alert(message):
             age_days = get_message_age_days(message)
             if age_days is not None and age_days > self.settings.security_alerts_retention_days:
+                provider = get_alert_provider_name(message)
                 return ClassificationResult(
                     message_id=message.id,
                     thread_id=message.thread_id,
@@ -81,7 +87,7 @@ class SpamScorer:
                     date_str=message.date_str,
                     score=1.0,
                     action="TARGETED_TRASH",
-                    reason=f"Expired Security Alert: Security/sign-in notice is {int(age_days)} days old (exceeds {self.settings.security_alerts_retention_days}-day safety retention limit)",
+                    reason=f"Expired Security Alert: Sign-in/login notice from {provider} is {int(age_days)} days old (exceeds {self.settings.security_alerts_retention_days}-day safety retention limit)",
                     is_protected=False,
                     labels=message.labels,
                 )

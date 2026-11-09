@@ -197,7 +197,7 @@ def test_security_alerts_expiration_active():
     res_recent = scorer.evaluate(recent_alert)
     assert res_recent.is_protected is True
     assert res_recent.action == "PROTECTED"
-    assert "Recent security alert" in res_recent.reason
+    assert "sign-in alert" in res_recent.reason
 
     # 2. Expired security alert (20 days old) -> MUST BE TARGETED_TRASH
     expired_alert = create_sample_message(
@@ -293,6 +293,116 @@ def test_security_alerts_auto_expire_disabled():
     assert res.action == "PROTECTED"
     assert "google.com" in res.reason
 
+def test_github_and_multiplatform_login_alerts_expiration():
+    """Verify that login/sign-in alerts from GitHub, Microsoft, Apple, Discord expire after 14 days,
+    while development PRs and receipts stay protected."""
+    wl_config = WhitelistConfig(
+        protected_domains=["github.com", "microsoft.com", "apple.com", "google.com"],
+        protected_keywords=["2fa", "verification code", "receipt", "invoice"]
+    )
+    guard = WhitelistGuard(
+        wl_config,
+        expire_security_alerts=True,
+        security_alerts_retention_days=14
+    )
+    scorer = SpamScorer(
+        guard,
+        CustomRulesMatcher(CustomRulesConfig()),
+        DetectionSettings(expire_old_security_alerts=True, security_alerts_retention_days=14)
+    )
+
+    now = datetime.now(timezone.utc)
+
+    # 1. GitHub login notice (20 days old) -> MUST BE TARGETED_TRASH
+    gh_old_login = create_sample_message(
+        mid="gh_login_001",
+        sender="GitHub",
+        sender_email="no-reply@github.com",
+        sender_domain="github.com",
+        subject="[GitHub] A new device was used to sign in to your account",
+        snippet="We noticed a new sign-in to your GitHub account from Chrome on Windows.",
+        date=now - timedelta(days=20),
+    )
+    res_gh = scorer.evaluate(gh_old_login)
+    assert res_gh.is_protected is False
+    assert res_gh.action == "TARGETED_TRASH"
+    assert res_gh.score == 1.0
+    assert "GitHub" in res_gh.reason
+
+    # 2. GitHub recent login notice (3 days old) -> MUST BE PROTECTED
+    gh_recent_login = create_sample_message(
+        mid="gh_login_002",
+        sender="GitHub",
+        sender_email="no-reply@github.com",
+        sender_domain="github.com",
+        subject="[GitHub] Successful sign-in from new IP address",
+        snippet="A successful sign-in to your account was detected.",
+        date=now - timedelta(days=3),
+    )
+    res_gh_recent = scorer.evaluate(gh_recent_login)
+    assert res_gh_recent.is_protected is True
+    assert res_gh_recent.action == "PROTECTED"
+    assert "GitHub" in res_gh_recent.reason
+
+    # 3. GitHub Pull Request (25 days old) -> MUST STAY PROTECTED (Excluded from security alert deletion!)
+    gh_pr = create_sample_message(
+        mid="gh_pr_001",
+        sender="GitHub",
+        sender_email="notifications@github.com",
+        sender_domain="github.com",
+        subject="[debanjan-steel/Spam-Email-Deleter] Pull request #2: login feature updated",
+        snippet="Review requested on pull request #2.",
+        date=now - timedelta(days=25),
+    )
+    res_pr = scorer.evaluate(gh_pr)
+    assert res_pr.is_protected is True
+    assert res_pr.action == "PROTECTED"
+
+    # 4. Microsoft unusual sign-in (22 days old) -> MUST BE TARGETED_TRASH
+    ms_old_login = create_sample_message(
+        mid="ms_login_001",
+        sender="Microsoft account team",
+        sender_email="account-security-noreply@accountprotection.microsoft.com",
+        sender_domain="accountprotection.microsoft.com",
+        subject="Microsoft account unusual sign-in activity",
+        snippet="We detected something unusual about a recent sign-in to your Microsoft account.",
+        date=now - timedelta(days=22),
+    )
+    res_ms = scorer.evaluate(ms_old_login)
+    assert res_ms.is_protected is False
+    assert res_ms.action == "TARGETED_TRASH"
+    assert "Microsoft" in res_ms.reason
+
+    # 5. Apple ID sign-in alert (18 days old) -> MUST BE TARGETED_TRASH
+    apple_old_login = create_sample_message(
+        mid="apple_login_001",
+        sender="Apple",
+        sender_email="appleid@id.apple.com",
+        sender_domain="apple.com",
+        subject="Your Apple ID was used to sign in to iCloud via a web browser",
+        snippet="Date and Time: Sunday, October 22, 2026. Browser: Chrome.",
+        date=now - timedelta(days=18),
+    )
+    res_apple = scorer.evaluate(apple_old_login)
+    assert res_apple.is_protected is False
+    assert res_apple.action == "TARGETED_TRASH"
+    assert "Apple" in res_apple.reason
+
+    # 6. Discord new login alert (16 days old) -> MUST BE TARGETED_TRASH
+    discord_old_login = create_sample_message(
+        mid="discord_login_001",
+        sender="Discord",
+        sender_email="noreply@discord.com",
+        sender_domain="discord.com",
+        subject="New login from London, UK",
+        snippet="We noticed a login from an IP address or location you don't usually use.",
+        date=now - timedelta(days=16),
+    )
+    res_discord = scorer.evaluate(discord_old_login)
+    assert res_discord.is_protected is False
+    assert res_discord.action == "TARGETED_TRASH"
+    assert "Discord" in res_discord.reason
+
 if __name__ == "__main__":
     test_whitelist_protection_keywords()
     test_whitelist_starred_immunity()
@@ -302,4 +412,5 @@ if __name__ == "__main__":
     test_security_alerts_expiration_active()
     test_security_alerts_google_invoices_protected()
     test_security_alerts_auto_expire_disabled()
-    print("All engine and security alert tests passed successfully!")
+    test_github_and_multiplatform_login_alerts_expiration()
+    print("All engine and multiplatform security alert tests passed successfully!")

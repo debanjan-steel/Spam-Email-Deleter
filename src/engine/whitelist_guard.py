@@ -7,62 +7,181 @@ from typing import Optional, Tuple
 from src.config_loader import WhitelistConfig
 from src.connectors.gmail_connector import EmailMessage
 
+# Keywords and compound phrases indicating account sign-in, login, or security alert notifications
 SECURITY_ALERT_KEYWORDS = [
+    # Sign-in & Login alerts across all platforms (GitHub, Google, Microsoft, Apple, Steam, etc.)
     "security alert",
     "critical security alert",
-    "new sign-in",
+    "security notification",
     "recent security activity",
+    "new sign-in",
+    "new sign in",
+    "new login",
+    "new log-in",
+    "new device signed in",
+    "new device logged in",
+    "new device was used to sign in",
+    "new device was used to log in",
+    "device was used to sign in",
+    "device was used to log in",
+    "access from new",
+    "access from a new",
+    "unusual sign-in",
+    "unusual login",
+    "suspicious sign-in",
+    "suspicious login",
+    "unrecognized sign-in",
+    "unrecognized login",
+    "sign-in attempt",
+    "login attempt",
+    "successful sign-in",
+    "successful login",
+    "you just logged in",
+    "you just signed in",
+    "you've logged in",
+    "you've signed in",
+    "did you just log in",
+    "did you just sign in",
+    "someone logged in",
+    "someone signed in",
+    "was used to sign in",
+    "was used to log in",
+    "logged in from",
+    "signed in from",
+    "signed into your",
+    "logged into your",
+    "login verification",
+    "sign-in verification",
+    # Password & Verification alerts
     "password changed",
     "password was changed",
+    "password reset successful",
     "2-step verification turned",
     "2-step verification was",
     "two-step verification",
+    "2-factor authentication",
+    "two-factor authentication",
     "verification code",
+    "one-time password",
+    "one-time passcode",
+    "steam guard code",
+    "security code",
     "account recovered",
-    "access granted to",
-    "suspicious sign-in",
-    "new device signed in",
-    "security notification",
     "recovery phone changed",
     "recovery email changed",
-    "unrecognized sign-in",
     "review recent activity",
-    "someone added you",
+    "someone added you to an account",
+    "access granted to",
 ]
+
+# Known security / auth senders across major platforms
+KNOWN_AUTH_SENDERS = [
+    "accounts.google.com",
+    "google.com",
+    "accountprotection.microsoft.com",
+    "appleid@id.apple.com",
+    "github.com",
+    "steampowered.com",
+    "linkedin.com",
+    "x.com",
+    "twitter.com",
+    "facebookmail.com",
+    "dropbox.com",
+    "slack.com",
+    "discord.com",
+    "spotify.com",
+    "netflix.com",
+    "amazon.com",
+    "gitlab.com",
+    "bitbucket.org",
+]
+
+# Exclusions to strictly prevent false matches on transactional, financial, and dev repo notifications
+ALERT_EXCLUSIONS = [
+    "invoice", "receipt", "billing", "order confirmation",
+    "payment received", "payment confirmation", "bank statement",
+    "tax document", "subscription renewed", "subscription confirmation",
+    "promo code", "discount code", "coupon",
+    "pull request", "issue #", "new issue", "merged #", "pushed to",
+    "created a branch", "release v", "workflow run"
+]
+
+def get_alert_provider_name(message: EmailMessage) -> str:
+    """Extracts a friendly brand/provider name for the security alert notice."""
+    sender_lower = (message.sender_email or "").lower()
+    domain_lower = (message.sender_domain or "").lower()
+    subject_lower = (message.subject or "").lower()
+
+    if "github" in sender_lower or "github" in domain_lower or "[github]" in subject_lower:
+        return "GitHub"
+    if "google" in sender_lower or "google" in domain_lower:
+        return "Google"
+    if "microsoft" in sender_lower or "microsoft" in domain_lower:
+        return "Microsoft"
+    if "apple" in sender_lower or "apple" in domain_lower:
+        return "Apple"
+    if "steam" in sender_lower or "steampowered" in domain_lower:
+        return "Steam"
+    if "discord" in sender_lower or "discord" in domain_lower:
+        return "Discord"
+    if "linkedin" in sender_lower or "linkedin" in domain_lower:
+        return "LinkedIn"
+    if "twitter" in sender_lower or "x.com" in domain_lower:
+        return "X (Twitter)"
+    if "facebook" in sender_lower or "facebookmail" in domain_lower or "meta" in domain_lower:
+        return "Facebook / Meta"
+    if "dropbox" in sender_lower or "dropbox" in domain_lower:
+        return "Dropbox"
+    if "slack" in sender_lower or "slack" in domain_lower:
+        return "Slack"
+    if "amazon" in sender_lower or "amazon" in domain_lower:
+        return "Amazon"
+    if "spotify" in sender_lower or "spotify" in domain_lower:
+        return "Spotify"
+    if "netflix" in sender_lower or "netflix" in domain_lower:
+        return "Netflix"
+
+    if message.sender_domain:
+        return message.sender_domain
+    return message.sender or "Account Service"
 
 def is_security_alert(message: EmailMessage) -> bool:
     """Detects whether an email is an automated account security or sign-in alert.
     
-    Covers Google security alerts as well as other major providers (Apple, Microsoft, GitHub).
+    Covers Google, GitHub, Microsoft, Apple, Steam, Discord, and any other platform
+    sending login/sign-in notifications, 2FA codes, or security alerts.
     """
     sender_lower = (message.sender_email or "").lower()
     domain_lower = (message.sender_domain or "").lower()
     subject_lower = (message.subject or "").lower()
     content_lower = f"{subject_lower} {(message.snippet or '').lower()}"
 
-    # Exclude receipts, invoices, orders, and financial/billing emails
-    for excl in ["invoice", "receipt", "billing", "order confirmation", "payment received", "payment confirmation", "bank statement", "tax document", "subscription"]:
+    # 1. Strict Exclusions: receipts, invoices, financial billing, and developer PR/issue notifications
+    for excl in ALERT_EXCLUSIONS:
         if excl in content_lower:
             return False
 
-    is_security_sender = (
-        "accounts.google.com" in sender_lower or
-        "google.com" in domain_lower or
-        sender_lower.startswith("no-reply@accounts.google.com") or
-        "accountprotection.microsoft.com" in sender_lower or
-        "appleid@id.apple.com" in sender_lower or
-        sender_lower in ("no-reply@github.com", "notifications@github.com")
-    )
+    # 2. Check if sender is a recognized authentication/security domain
+    is_auth_sender = any(auth_domain in sender_lower or auth_domain in domain_lower for auth_domain in KNOWN_AUTH_SENDERS)
 
-    has_security_keyword = any(kw in content_lower for kw in SECURITY_ALERT_KEYWORDS)
-    if is_security_sender and has_security_keyword:
+    # 3. Check for security/sign-in phrases
+    has_alert_phrase = any(kw in content_lower for kw in SECURITY_ALERT_KEYWORDS)
+    if is_auth_sender and has_alert_phrase:
         return True
 
-    # Check for unmistakable alert subjects even if sender format slightly varies
-    if any(phrase in subject_lower for phrase in [
-        "security alert", "critical security alert", "new sign-in on", "new sign-in from", "recent security activity"
-    ]):
-        return True
+    # 4. Check subject line for unmistakable sign-in / login phrases from ANY provider
+    for phrase in [
+        "security alert", "critical security alert", "security notification", "recent security activity",
+        "new sign-in", "new sign in", "new login", "new log-in",
+        "new device signed in", "new device logged in", "was used to sign in", "was used to log in",
+        "you just logged in", "you just signed in", "you've logged in", "you've signed in",
+        "did you just log in", "did you just sign in", "someone logged in", "someone signed in",
+        "unusual sign-in", "unusual login", "suspicious sign-in", "suspicious login",
+        "unrecognized sign-in", "unrecognized login", "access from new", "access from a new",
+        "sign-in attempt", "login attempt", "successful sign-in", "successful login",
+    ]:
+        if phrase in subject_lower:
+            return True
 
     return False
 
@@ -123,9 +242,9 @@ class WhitelistGuard:
         if flags.protect_starred and message.is_starred:
             return True, "Protected: Starred / Flagged by user"
 
-        # Special Safeguard: Ephemeral Security Alerts Expiration
-        # Google sign-in alerts and security notifications are critical when recent,
-        # but become obsolete after the retention period.
+        # Special Safeguard: Ephemeral Security & Sign-In Alerts Expiration
+        # Automated login notices and security alerts (from Google, GitHub, Microsoft, Apple, etc.)
+        # are critical when recent, but become obsolete after the retention period.
         if self.expire_security_alerts and is_security_alert(message):
             age_days = get_message_age_days(message)
             if age_days is not None and age_days > self.security_alerts_retention_days:
@@ -133,8 +252,9 @@ class WhitelistGuard:
                 return False, ""
             else:
                 # Recent security alert: Absolute immunity within retention window
+                provider = get_alert_provider_name(message)
                 age_str = f"{int(age_days)}d old" if age_days is not None else "recent"
-                return True, f"Protected: Recent security alert ({age_str}, within {self.security_alerts_retention_days}-day safety window)"
+                return True, f"Protected: Recent {provider} sign-in alert ({age_str}, within {self.security_alerts_retention_days}-day safety window)"
 
         # 2. Important label check
         if flags.protect_important and message.is_important:
