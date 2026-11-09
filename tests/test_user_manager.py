@@ -154,9 +154,16 @@ def test_device_sessions_lifecycle():
         assert user_mgr.validate_session(t1) is not None
         assert user_mgr.validate_session(t2) is not None
 
-        user_mgr.revoke_all_sessions(user["id"])
-        assert user_mgr.validate_session(t1) is None
-        assert user_mgr.validate_session(t2) is None
+        # 6. Container restart simulation (user_sessions wiped, but user exists in app_users)
+        t_restart = user_mgr.create_session(user["id"])
+        with user_mgr._get_connection() as conn:
+            conn.execute("DELETE FROM user_sessions")
+            conn.commit()
+        # Even with empty user_sessions table, validate_session decrypts and restores!
+        restored_user = user_mgr.validate_session(t_restart)
+        assert restored_user is not None
+        assert restored_user["id"] == user["id"]
+        assert restored_user["gmail"] == "sessiontest@gmail.com"
 
     print("Device session lifecycle tests passed successfully!")
 

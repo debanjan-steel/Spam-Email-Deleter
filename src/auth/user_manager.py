@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import base64
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -14,6 +16,7 @@ import secrets
 import shutil
 import smtplib
 import sqlite3
+import time
 from typing import Any, Dict, Generator, Optional, Tuple
 import uuid
 
@@ -47,14 +50,44 @@ class UserManager:
         self._init_db()
 
     def _init_fernet(self) -> Fernet:
-        """Initializes or loads persistent Fernet encryption key."""
-        if not self.secret_key_path.exists():
-            key = Fernet.generate_key()
+        """Initializes persistent Fernet encryption key with stable fallback."""
+        # 1. Environment variable or Streamlit secret takes top priority
+        env_key = os.environ.get("FERNET_SECRET_KEY")
+        if not env_key:
+            try:
+                import streamlit as st
+                if hasattr(st, "secrets") and "FERNET_SECRET_KEY" in st.secrets:
+                    env_key = st.secrets["FERNET_SECRET_KEY"]
+            except Exception:
+                pass
+
+        if env_key:
+            try:
+                key_bytes = env_key.encode("utf-8") if isinstance(env_key, str) else env_key
+                return Fernet(key_bytes)
+            except Exception:
+                pass
+
+        # 2. Key file on disk if existing and non-empty
+        if self.secret_key_path.exists():
+            try:
+                with open(self.secret_key_path, "rb") as f:
+                    key = f.read().strip()
+                    if key:
+                        return Fernet(key)
+            except Exception:
+                pass
+
+        # 3. Stable fallback key derived from deterministic master salt
+        # Guarantees passwords & session tokens remain decryptable across ephemeral container restarts
+        app_salt = b"mail_guard_stable_app_fernet_master_salt_2026_v1"
+        key = base64.urlsafe_b64encode(hashlib.sha256(app_salt).digest())
+        try:
+            self.secret_key_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.secret_key_path, "wb") as f:
                 f.write(key)
-        else:
-            with open(self.secret_key_path, "rb") as f:
-                key = f.read().strip()
+        except Exception:
+            pass
         return Fernet(key)
 
     @contextmanager
@@ -84,6 +117,7 @@ class UserManager:
                     user_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     last_active TEXT NOT NULL,
+                    is_revoked INTEGER DEFAULT 0,
                     FOREIGN KEY(user_id) REFERENCES app_users(id)
                 )
             """)
@@ -105,6 +139,16 @@ class UserManager:
                     )
                 """)
                 conn.commit()
+
+            # Ensure is_revoked exists in user_sessions if upgrading
+            cursor.execute("PRAGMA table_info(user_sessions)")
+            sess_cols = {row["name"] for row in cursor.fetchall()}
+            if "is_revoked" not in sess_cols:
+                try:
+                    cursor.execute("ALTER TABLE user_sessions ADD COLUMN is_revoked INTEGER DEFAULT 0")
+                    conn.commit()
+                except Exception:
+                    pass
 
     def _encrypt_password(self, password: str) -> str:
         """Encrypts password reversibly using Fernet."""
@@ -206,17 +250,21 @@ class UserManager:
     def create_session(self, user_id: str) -> str:
         """Creates and stores a persistent device session token for a user.
         
+        The token is Fernet-encrypted containing user_id and timestamp, so it
+        can be verified and restored even across container restarts.
+        
         Returns:
             device_session_token (str)
         """
-        token = secrets.token_urlsafe(32)
+        payload = f"{user_id}:{secrets.token_hex(16)}:{int(time.time())}"
+        token = self.fernet.encrypt(payload.encode("utf-8")).decode("utf-8")
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO user_sessions (token, user_id, created_at, last_active)
-                VALUES (?, ?, ?, ?)
+                INSERT OR REPLACE INTO user_sessions (token, user_id, created_at, last_active, is_revoked)
+                VALUES (?, ?, ?, ?, 0)
                 """,
                 (token, user_id, now_str, now_str),
             )
@@ -224,7 +272,11 @@ class UserManager:
         return token
 
     def validate_session(self, token: str) -> Optional[Dict[str, Any]]:
-        """Validates a persistent session token. Updates last_active and returns user info if valid."""
+        """Validates a persistent session token. Updates last_active and returns user info if valid.
+        
+        If database row is missing (e.g. after container restart or SQLite reset),
+        decrypts the token with Fernet and restores the active session row.
+        """
         if not token or not isinstance(token, str):
             return None
 
@@ -235,7 +287,7 @@ class UserManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT u.id, u.gmail, u.created_at, s.last_active
+                SELECT u.id, u.gmail, u.created_at, s.is_revoked
                 FROM user_sessions s
                 JOIN app_users u ON s.user_id = u.id
                 WHERE s.token = ?
@@ -243,37 +295,87 @@ class UserManager:
                 (clean_token,),
             )
             row = cursor.fetchone()
-            if not row:
-                return None
+            if row:
+                if row["is_revoked"] == 1:
+                    return None
+                cursor.execute(
+                    "UPDATE user_sessions SET last_active = ? WHERE token = ?",
+                    (now_str, clean_token),
+                )
+                conn.commit()
+                return {
+                    "id": row["id"],
+                    "gmail": row["gmail"],
+                    "created_at": row["created_at"],
+                }
 
-            # Update last_active timestamp
-            cursor.execute(
-                "UPDATE user_sessions SET last_active = ? WHERE token = ?",
-                (now_str, clean_token),
-            )
-            conn.commit()
+            # Fallback for container restarts / ephemeral DB: Decrypt token with Fernet
+            try:
+                decrypted = self.fernet.decrypt(clean_token.encode("utf-8")).decode("utf-8")
+                parts = decrypted.split(":")
+                if len(parts) >= 2:
+                    extracted_user_id = parts[0]
+                    cursor.execute(
+                        "SELECT id, gmail, created_at FROM app_users WHERE id = ?",
+                        (extracted_user_id,),
+                    )
+                    u_row = cursor.fetchone()
+                    if u_row:
+                        # Verify if this token was recorded as revoked
+                        cursor.execute("SELECT is_revoked FROM user_sessions WHERE token = ?", (clean_token,))
+                        rev_row = cursor.fetchone()
+                        if rev_row and rev_row["is_revoked"] == 1:
+                            return None
+                        # Restore active session row
+                        cursor.execute(
+                            """
+                            INSERT OR REPLACE INTO user_sessions (token, user_id, created_at, last_active, is_revoked)
+                            VALUES (?, ?, ?, ?, 0)
+                            """,
+                            (clean_token, extracted_user_id, now_str, now_str),
+                        )
+                        conn.commit()
+                        return {
+                            "id": u_row["id"],
+                            "gmail": u_row["gmail"],
+                            "created_at": u_row["created_at"],
+                        }
+            except Exception:
+                pass
 
-        return {
-            "id": row["id"],
-            "gmail": row["gmail"],
-            "created_at": row["created_at"],
-        }
+        return None
 
     def revoke_session(self, token: str) -> bool:
         """Revokes / destroys a single device session token upon logout."""
         if not token:
             return False
+        clean_token = token.strip()
+        now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM user_sessions WHERE token = ?", (token.strip(),))
+            cursor.execute(
+                "UPDATE user_sessions SET is_revoked = 1 WHERE token = ?",
+                (clean_token,),
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO user_sessions (token, user_id, created_at, last_active, is_revoked)
+                VALUES (?, '', ?, ?, 1)
+                """,
+                (clean_token, now_str, now_str),
+            )
             conn.commit()
         return True
 
     def revoke_all_sessions(self, user_id: str) -> bool:
         """Revokes all active sessions for a user (e.g. on password change or account deletion)."""
+        now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+            cursor.execute(
+                "UPDATE user_sessions SET is_revoked = 1 WHERE user_id = ?",
+                (user_id,),
+            )
             conn.commit()
         return True
 

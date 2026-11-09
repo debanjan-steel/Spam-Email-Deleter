@@ -118,7 +118,7 @@ pwa_header_html = """
   }
 </script>
 """
-components.html(pwa_header_html, height=0, width=0)
+st.html(pwa_header_html, unsafe_allow_javascript=True)
 
 # Inject Mobile & Desktop Responsive Styles
 responsive_css = """
@@ -221,21 +221,26 @@ if "current_user" not in st.session_state:
 if "active_session_token" not in st.session_state:
     st.session_state.active_session_token = None
 
-# Handle URL Session Auto-Login
+# Auto-Login via HTTP Cookie (0-redirect, instant) or URL query parameter
+cookie_token = st.context.cookies.get("mail_guard_device_token")
 url_token = st.query_params.get("session_token")
-if not st.session_state.current_user and url_token:
-    u_data = user_mgr.validate_session(url_token)
+detected_token = cookie_token or url_token
+
+if not st.session_state.current_user and detected_token:
+    u_data = user_mgr.validate_session(detected_token)
     if u_data:
         st.session_state.current_user = u_data
-        st.session_state.active_session_token = url_token
+        st.session_state.active_session_token = detected_token
         st.session_state.active_account = None
         st.session_state.scan_results = []
         st.session_state.selected_mids = set()
-        st.query_params.clear()
-        st.rerun()
+        if url_token:
+            st.query_params.clear()
+            st.rerun()
     else:
-        # Invalid or expired session: clear parameter and mark for removal from client localStorage
-        st.query_params.clear()
+        # Invalid or expired session: clear parameter and mark for removal from client
+        if url_token:
+            st.query_params.clear()
         st.session_state.clear_device_token = True
 
 if not st.session_state.current_user:
@@ -243,43 +248,59 @@ if not st.session_state.current_user:
     # AUTHENTICATION SCREEN: LOGIN & CREATE ACCOUNT
     # ---------------------------------------------------------
 
-    # 1. Clear device token from localStorage if logged out or token expired
+    # 1. Clear device cookie & localStorage if logged out or token expired
     if st.session_state.get("clear_device_token"):
         st.session_state.pop("clear_device_token")
-        clear_storage_js = """
+        clear_cookie_html = """
         <script>
-        try {
-            window.parent.localStorage.removeItem('mail_guard_device_token');
-            const url = new URL(window.parent.location.href);
-            if (url.searchParams.has('session_token')) {
-                url.searchParams.delete('session_token');
-                window.parent.history.replaceState({}, '', url.href);
-            }
-        } catch (e) {
-            console.error('Error clearing device token:', e);
-        }
-        </script>
-        """
-        components.html(clear_storage_js, height=0, width=0)
-    else:
-        # 2. Check client localStorage for persistent device session
-        check_storage_js = """
-        <script>
-        try {
-            const token = window.parent.localStorage.getItem('mail_guard_device_token');
-            if (token) {
-                const url = new URL(window.parent.location.href);
-                if (!url.searchParams.has('session_token')) {
-                    url.searchParams.set('session_token', token);
-                    window.parent.location.href = url.href;
+        (function() {
+            try {
+                var isSecure = window.location.protocol === 'https:' ? '; Secure' : '';
+                document.cookie = 'mail_guard_device_token=; path=/; max-age=0; SameSite=Lax' + isSecure;
+                localStorage.removeItem('mail_guard_device_token');
+                var url = new URL(window.location.href);
+                if (url.searchParams.has('session_token')) {
+                    url.searchParams.delete('session_token');
+                    window.history.replaceState({}, '', url.href);
                 }
+            } catch (e) {
+                console.error('Error clearing device token:', e);
             }
-        } catch (e) {
-            console.error('LocalStorage access error:', e);
-        }
+        })();
         </script>
         """
-        components.html(check_storage_js, height=0, width=0)
+        st.html(clear_cookie_html, unsafe_allow_javascript=True)
+    else:
+        # 2. Client-side fallback: If device has saved token in localStorage or cookie, auto-restore
+        restore_storage_html = """
+        <script>
+        (function() {
+            try {
+                var token = localStorage.getItem('mail_guard_device_token');
+                if (!token) {
+                    var match = document.cookie.match(/(?:^|; )mail_guard_device_token=([^;]*)/);
+                    if (match && match[1]) {
+                        token = decodeURIComponent(match[1]);
+                        localStorage.setItem('mail_guard_device_token', token);
+                    }
+                }
+                if (token) {
+                    var isSecure = window.location.protocol === 'https:' ? '; Secure' : '';
+                    var maxAge = 60 * 60 * 24 * 365;
+                    document.cookie = 'mail_guard_device_token=' + encodeURIComponent(token) + '; path=/; max-age=' + maxAge + '; SameSite=Lax' + isSecure;
+                    var url = new URL(window.location.href);
+                    if (!url.searchParams.has('session_token')) {
+                        url.searchParams.set('session_token', token);
+                        window.location.replace(url.href);
+                    }
+                }
+            } catch (e) {
+                console.error('LocalStorage check error:', e);
+            }
+        })();
+        </script>
+        """
+        st.html(restore_storage_html, unsafe_allow_javascript=True)
 
     col_l, col_main, col_r = st.columns([1, 2, 1])
     with col_main:
@@ -376,24 +397,30 @@ if not st.session_state.current_user:
 # -------------------------------------------------------------
 current_user = st.session_state.current_user
 
-# Persist device token to browser localStorage if newly authenticated
+# Persist device token to browser cookie & localStorage if newly authenticated
 if st.session_state.get("set_device_token"):
     tok_to_store = st.session_state.pop("set_device_token")
-    save_storage_js = f"""
+    save_cookie_html = f"""
     <script>
-    try {{
-        window.parent.localStorage.setItem('mail_guard_device_token', '{tok_to_store}');
-        const url = new URL(window.parent.location.href);
-        if (url.searchParams.has('session_token')) {{
-            url.searchParams.delete('session_token');
-            window.parent.history.replaceState({{}}, '', url.href);
+    (function() {{
+        try {{
+            var token = "{tok_to_store}";
+            var maxAge = 60 * 60 * 24 * 365; // 1 year
+            var isSecure = window.location.protocol === 'https:' ? '; Secure' : '';
+            document.cookie = "mail_guard_device_token=" + encodeURIComponent(token) + "; path=/; max-age=" + maxAge + "; SameSite=Lax" + isSecure;
+            localStorage.setItem("mail_guard_device_token", token);
+            var url = new URL(window.location.href);
+            if (url.searchParams.has("session_token")) {{
+                url.searchParams.delete("session_token");
+                window.history.replaceState({{}}, "", url.href);
+            }}
+        }} catch(e) {{
+            console.error("Error setting persistent device session:", e);
         }}
-    }} catch (e) {{
-        console.error('Error saving device token:', e);
-    }}
+    }})();
     </script>
     """
-    components.html(save_storage_js, height=0, width=0)
+    st.html(save_cookie_html, unsafe_allow_javascript=True)
 
 user_paths = user_mgr.get_user_paths(current_user["id"])
 

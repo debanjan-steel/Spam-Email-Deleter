@@ -21,3 +21,4 @@ jobs:
           else
             echo "⚠️ Non-200 response received: $STATUS. App might be waking up."
           fi
+
