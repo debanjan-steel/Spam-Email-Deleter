@@ -85,9 +85,64 @@ def test_gmail_connector_pagination():
     assert mids[799] == "msg_799"
     assert mock_service.users().messages().list.call_count == 2
 
+def test_multi_folder_quota_fill():
+    """Test that multi-folder scanning dynamically fills quota up to max_emails instead of 1/N truncation."""
+    mock_connector = MagicMock()
+    # Folder 1 has 3000 emails, Folder 2 has 2000 emails, Folder 3 has 1000 emails
+    def mock_list_ids(query=None, label_ids=None, max_results=50):
+        folder = label_ids[0] if label_ids else "INBOX"
+        if folder == "Promotions":
+            available = [f"Promotions:{i}" for i in range(3000)]
+        elif folder == "Spam":
+            available = [f"Spam:{i}" for i in range(2000)]
+        else:
+            available = [f"{folder}:{i}" for i in range(1000)]
+        return available[:max_results]
+
+    mock_connector.list_message_ids.side_effect = mock_list_ids
+
+    folders_to_scan = ["Promotions", "Spam", "Updates"]
+    max_emails = 5588
+    all_mids = []
+
+    for label in folders_to_scan:
+        current_unique = len(dict.fromkeys(all_mids))
+        remaining_needed = max_emails - current_unique
+        if remaining_needed <= 0:
+            break
+        mids = mock_connector.list_message_ids(
+            query=None,
+            label_ids=[label],
+            max_results=remaining_needed,
+        )
+        all_mids.extend(mids)
+
+    unique_mids = list(dict.fromkeys(all_mids))[:max_emails]
+    # With the new dynamic fill logic, exactly 5588 emails are discovered!
+    assert len(unique_mids) == 5588
+    assert len([m for m in unique_mids if m.startswith("Promotions:")]) == 3000
+    assert len([m for m in unique_mids if m.startswith("Spam:")]) == 2000
+    assert len([m for m in unique_mids if m.startswith("Updates:")]) == 588
+
+def test_empty_results_view_safety():
+    """Test that empty results view (e.g. after all candidates are trashed) does not throw KeyError."""
+    import pandas as pd
+    TABLE_COLUMNS = ["Select", "Action", "Score", "Sender", "Email", "Subject", "Date", "Reason", "Message ID"]
+    
+    # 1. Empty table data produces dataframe with valid columns
+    empty_df = pd.DataFrame([], columns=TABLE_COLUMNS)
+    assert "Select" in empty_df.columns
+    assert "Message ID" in empty_df.columns
+
+    # 2. Filtering on empty dataframe does not raise KeyError
+    checked_in_view = set(empty_df[empty_df["Select"] == True]["Message ID"].dropna().tolist())
+    assert len(checked_in_view) == 0
+
 if __name__ == "__main__":
     test_imap_multi_fetch_parsing()
     test_config_high_limit_default()
     test_gmail_connector_pagination()
+    test_multi_folder_quota_fill()
+    test_empty_results_view_safety()
     print("All high-volume batch tests passed successfully!")
 

@@ -675,12 +675,16 @@ with tab_scan:
                 all_mids = []
                 with st.spinner(f"Discovering message IDs from {active_account_email}..."):
                     if folders_to_scan:
-                        per_folder_limit = max(100, max_emails // len(folders_to_scan) + 50) if len(folders_to_scan) > 1 else max_emails
+                        # Dynamically fill quota across selected categories until max_emails limit is satisfied
                         for label in folders_to_scan:
+                            current_unique = len(dict.fromkeys(all_mids))
+                            remaining_needed = max_emails - current_unique
+                            if remaining_needed <= 0:
+                                break
                             mids = connector.list_message_ids(
                                 query=custom_query or None,
                                 label_ids=[label],
-                                max_results=per_folder_limit,
+                                max_results=remaining_needed,
                             )
                             all_mids.extend(mids)
                     else:
@@ -707,11 +711,21 @@ with tab_scan:
                     st.session_state.selected_mids = {
                         r.message_id for r in results if r.action in ("TARGETED_TRASH", "SPAM_TRASH")
                     }
-                    st.success(f"Scan complete! Evaluated {len(results):,} emails.")
+                    if len(results) < max_emails:
+                        st.info(f"ℹ️ Scan complete: Evaluated all {len(results):,} available emails across the selected categories (requested limit: up to {max_emails:,}).")
+                    else:
+                        st.success(f"🎉 Scan complete! Successfully evaluated {len(results):,} emails.")
             except Exception as e:
                 st.error(f"Error during scan: {e}")
 
         # Render Results Table
+        # Display persistent action banner from trashing action if present
+        if st.session_state.get("trash_action_banner"):
+            st.success(st.session_state.pop("trash_action_banner"))
+            st.balloons()
+        if st.session_state.get("trash_warning_banner"):
+            st.warning(st.session_state.pop("trash_warning_banner"))
+
         results = st.session_state.scan_results
         if results:
             st.divider()
@@ -732,14 +746,18 @@ with tab_scan:
 
             st.subheader(f"Candidate Emails ({active_account_email})")
 
-            # Smart View Filter for Snappy Table Performance with Thousands of Emails
+            # Default to All Scanned if no deletion candidates remain
+            filter_options = [
+                f"🎯 Deletion Candidates ({cand_count:,})",
+                f"📋 All Scanned Emails ({total_count:,})",
+                f"🛡️ Safe & Protected Emails ({safe_count + prot_count:,})",
+            ]
+            default_filter_idx = 0 if cand_count > 0 else 1
+
             view_filter = st.radio(
                 "Filter View:",
-                [
-                    f"🎯 Deletion Candidates ({cand_count:,})",
-                    f"📋 All Scanned Emails ({total_count:,})",
-                    f"🛡️ Safe & Protected Emails ({safe_count + prot_count:,})",
-                ],
+                filter_options,
+                index=default_filter_idx,
                 horizontal=True,
                 key="results_view_filter",
             )
@@ -763,58 +781,66 @@ with tab_scan:
                     st.session_state.selected_mids = set()
                     st.rerun()
 
-            table_data = []
-            for r in display_results:
-                is_checked = r.message_id in st.session_state.selected_mids
-                action_badge = {
-                    "PROTECTED": "🛡️ Immune",
-                    "TARGETED_TRASH": "🎯 Manual Rule",
-                    "SPAM_TRASH": "🚨 Spam",
-                    "SAFE": "✅ Safe",
-                }.get(r.action, r.action)
+            if not display_results:
+                if "Deletion Candidates" in view_filter:
+                    st.info("🎉 All spam and deletion candidates have been moved to Trash or none were found! Select **📋 All Scanned Emails** above to review safe emails.")
+                else:
+                    st.info("ℹ️ No emails found matching this filter view.")
+            else:
+                table_data = []
+                for r in display_results:
+                    is_checked = r.message_id in st.session_state.selected_mids
+                    action_badge = {
+                        "PROTECTED": "🛡️ Immune",
+                        "TARGETED_TRASH": "🎯 Manual Rule",
+                        "SPAM_TRASH": "🚨 Spam",
+                        "SAFE": "✅ Safe",
+                    }.get(r.action, r.action)
 
-                table_data.append({
-                    "Select": is_checked,
-                    "Action": action_badge,
-                    "Score": f"{r.score:.2f}",
-                    "Sender": r.sender[:25],
-                    "Email": r.sender_email,
-                    "Subject": r.subject[:45],
-                    "Date": r.date_str[:16] if r.date_str else "",
-                    "Reason": r.reason,
-                    "Message ID": r.message_id,
-                })
+                    table_data.append({
+                        "Select": is_checked,
+                        "Action": action_badge,
+                        "Score": f"{r.score:.2f}",
+                        "Sender": (r.sender or "")[:25],
+                        "Email": r.sender_email or "",
+                        "Subject": (r.subject or "(No Subject)")[:45],
+                        "Date": r.date_str[:16] if r.date_str else "",
+                        "Reason": r.reason or "",
+                        "Message ID": r.message_id,
+                    })
 
-            df = pd.DataFrame(table_data)
-            column_config = {
-                "Select": st.column_config.CheckboxColumn("🗑️", width="small", help="Select to trash"),
-                "Action": st.column_config.TextColumn("Status", width="small"),
-                "Sender": st.column_config.TextColumn("From", width="medium"),
-                "Subject": st.column_config.TextColumn("Subject", width="large"),
-                "Reason": st.column_config.TextColumn("Reason", width="medium"),
-                "Score": st.column_config.TextColumn("Score", width="small"),
-                "Date": st.column_config.TextColumn("Date", width="small"),
-                "Email": None,      # Hidden visually for mobile compactness
-                "Message ID": None, # Hidden visually for mobile compactness
-            }
-            edited_df = st.data_editor(
-                df,
-                disabled=["Action", "Score", "Sender", "Email", "Subject", "Date", "Reason", "Message ID"],
-                column_config=column_config,
-                hide_index=True,
-                use_container_width=True,
-                key=f"results_editor_{view_filter[:4]}"
-            )
+                TABLE_COLUMNS = ["Select", "Action", "Score", "Sender", "Email", "Subject", "Date", "Reason", "Message ID"]
+                df = pd.DataFrame(table_data, columns=TABLE_COLUMNS)
 
-            # Preserve selection state accurately across filtered views
-            checked_in_view = set(edited_df[edited_df["Select"] == True]["Message ID"].tolist())
-            unchecked_in_view = set(edited_df[edited_df["Select"] == False]["Message ID"].tolist())
-            st.session_state.selected_mids = (st.session_state.selected_mids - unchecked_in_view) | checked_in_view
+                column_config = {
+                    "Select": st.column_config.CheckboxColumn("🗑️", width="small", help="Select to trash"),
+                    "Action": st.column_config.TextColumn("Status", width="small"),
+                    "Sender": st.column_config.TextColumn("From", width="medium"),
+                    "Subject": st.column_config.TextColumn("Subject", width="large"),
+                    "Reason": st.column_config.TextColumn("Reason", width="medium"),
+                    "Score": st.column_config.TextColumn("Score", width="small"),
+                    "Date": st.column_config.TextColumn("Date", width="small"),
+                    "Email": None,      # Hidden visually for mobile compactness
+                    "Message ID": None, # Hidden visually for mobile compactness
+                }
+                edited_df = st.data_editor(
+                    df,
+                    disabled=["Action", "Score", "Sender", "Email", "Subject", "Date", "Reason", "Message ID"],
+                    column_config=column_config,
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"results_editor_{view_filter[:4]}"
+                )
+
+                # Preserve selection state accurately and safely across filtered views
+                if not edited_df.empty and "Select" in edited_df.columns and "Message ID" in edited_df.columns:
+                    checked_in_view = set(edited_df[edited_df["Select"] == True]["Message ID"].dropna().tolist())
+                    unchecked_in_view = set(edited_df[edited_df["Select"] == False]["Message ID"].dropna().tolist())
+                    st.session_state.selected_mids = (st.session_state.selected_mids - unchecked_in_view) | checked_in_view
 
             total_selected = len(st.session_state.selected_mids)
-            st.write(f"**{total_selected:,} emails selected for deletion in {active_account_email}.**")
-
             if total_selected:
+                st.write(f"**{total_selected:,} emails selected for deletion in {active_account_email}.**")
                 if st.button(f"🗑️ Move {total_selected:,} Selected Emails to Trash ({active_account_email})", type="primary"):
                     try:
                         connector = auth.get_connector_for_account(active_account_email)
@@ -847,10 +873,12 @@ with tab_scan:
                                 account_email=active_account_email,
                                 action_type="TRASH"
                             )
-                            st.success(f"Moved {len(trashed_results):,} emails to Trash in `{active_account_email}`! Batch ID: `{batch_id}`")
-                            st.info("You can undo this anytime in the 'Audit Log & Undo' tab.")
+                            st.session_state.trash_action_banner = (
+                                f"🎉 Successfully moved {len(trashed_results):,} emails to Trash in `{active_account_email}`! "
+                                f"(Batch ID: `{batch_id}`). You can review or restore them anytime in the 'Audit Log & Undo' tab."
+                            )
                         else:
-                            st.warning("No emails were moved to trash.")
+                            st.session_state.trash_warning_banner = "No emails were moved to trash."
 
                         trashed_mid_set = {r.message_id for r in trashed_results}
                         st.session_state.scan_results = [
