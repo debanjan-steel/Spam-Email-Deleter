@@ -363,8 +363,17 @@ if not st.session_state.current_user:
                 btn_register = st.form_submit_button("✨ Create Account", type="primary", use_container_width=True)
 
             if btn_register:
-                if reg_pass != reg_confirm:
+                clean_reg_gmail = reg_gmail.strip().lower()
+                if not reg_gmail or not clean_reg_gmail:
+                    st.warning("Please enter your Gmail address.")
+                elif not reg_pass:
+                    st.warning("Please enter a password.")
+                elif reg_pass != reg_confirm:
                     st.error("Passwords do not match. Please verify your password.")
+                elif len(reg_pass) < 6:
+                    st.error("Password must be at least 6 characters long.")
+                elif user_mgr.user_exists(clean_reg_gmail):
+                    st.error(f"❌ **Gmail already in use**: An account with `{clean_reg_gmail}` already exists. Please switch to the **Sign In** tab to access your account.")
                 else:
                     ok, msg, u_data = user_mgr.create_user(reg_gmail, reg_pass)
                     if ok:
@@ -379,7 +388,7 @@ if not st.session_state.current_user:
                         st.success(f"🎉 {msg}")
                         st.rerun()
                     else:
-                        st.error(msg)
+                        st.error(f"❌ {msg}")
 
         st.divider()
         st.markdown("""

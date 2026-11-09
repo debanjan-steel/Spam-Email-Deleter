@@ -140,6 +140,10 @@ class UserManager:
                 """)
                 conn.commit()
 
+            # Ensure case-insensitive unique index exists on gmail
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_gmail_lower ON app_users(lower(gmail))")
+            conn.commit()
+
             # Ensure is_revoked exists in user_sessions if upgrading
             cursor.execute("PRAGMA table_info(user_sessions)")
             sess_cols = {row["name"] for row in cursor.fetchall()}
@@ -163,6 +167,18 @@ class UserManager:
         clean = gmail.strip().lower()
         return "@" in clean and "." in clean and len(clean) >= 5
 
+    def user_exists(self, gmail: str) -> bool:
+        """Checks whether an account already exists for the given Gmail address (case-insensitive failsafe)."""
+        if not gmail or not isinstance(gmail, str):
+            return False
+        clean_gmail = gmail.strip().lower()
+        if not clean_gmail:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM app_users WHERE lower(gmail) = ?", (clean_gmail,))
+            return cursor.fetchone() is not None
+
     def create_user(self, gmail: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Registers a new user with their Gmail and password.
         
@@ -174,6 +190,10 @@ class UserManager:
             return False, "Please enter a valid Gmail address (e.g. yourname@gmail.com).", None
         if len(password) < 6:
             return False, "Password must be at least 6 characters long.", None
+
+        # Fail-Safe 1: Explicit upfront check to prevent duplicate account creation
+        if self.user_exists(clean_gmail):
+            return False, f"Gmail already in use: An account with '{clean_gmail}' already exists. Please sign in instead.", None
 
         user_id = uuid.uuid4().hex
         pwd_encrypted = self._encrypt_password(password)
@@ -188,7 +208,8 @@ class UserManager:
                 )
                 conn.commit()
         except sqlite3.IntegrityError:
-            return False, f"An account with '{clean_gmail}' already exists. Please sign in instead.", None
+            # Fail-Safe 2: Database UNIQUE index constraint
+            return False, f"Gmail already in use: An account with '{clean_gmail}' already exists. Please sign in instead.", None
         except Exception as e:
             return False, f"Failed to create account: {e}", None
 

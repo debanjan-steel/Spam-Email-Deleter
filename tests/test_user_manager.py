@@ -38,10 +38,20 @@ def test_user_manager_full_lifecycle():
         assert user1["gmail"] == "user1@gmail.com"
         assert "id" in user1
 
-        # 4. Duplicate registration fails
+        # 4. Duplicate registration fails (failsafe check)
+        assert user_mgr.user_exists("user1@gmail.com")
+        assert user_mgr.user_exists("USER1@GMAIL.COM")
+        assert not user_mgr.user_exists("unknown@gmail.com")
+
         ok, msg, _ = user_mgr.create_user("user1@gmail.com", "anotherpass")
         assert not ok
-        assert "already exists" in msg
+        assert "already in use" in msg.lower()
+        assert "already exists" in msg.lower()
+
+        # 4b. Case-insensitive duplicate registration attempt fails
+        ok2, msg2, _ = user_mgr.create_user("USER1@GMAIL.COM", "anotherpass2")
+        assert not ok2
+        assert "already in use" in msg2.lower()
 
         # 5. Successful authentication
         ok, msg, auth_u = user_mgr.authenticate("user1@gmail.com", "MySecretPass_99")
