@@ -564,8 +564,11 @@ with tab_scan:
                 st.session_state.selected_folders = []
                 st.rerun()
 
-        if "scan_max_limit" not in st.session_state:
-            st.session_state.scan_max_limit = 1000
+        if "max_emails_input" not in st.session_state:
+            st.session_state["max_emails_input"] = 1000
+
+        def set_preset_limit(limit_val: int):
+            st.session_state["max_emails_input"] = limit_val
 
         col1, col2, col3 = st.columns([2.5, 1.2, 1.3])
         with col1:
@@ -583,12 +586,10 @@ with tab_scan:
                 "Max Emails to Fetch",
                 min_value=10,
                 max_value=50000,
-                value=int(st.session_state.scan_max_limit),
                 step=250,
+                key="max_emails_input",
                 help="Total maximum emails to fetch across the selected categories. Supports up to 50,000 emails per scan.",
-                key="max_emails_input"
             )
-            st.session_state.scan_max_limit = max_emails
 
         with col3:
             custom_query = st.text_input(
@@ -602,29 +603,25 @@ with tab_scan:
         with col_pres_label:
             st.caption("⚡ **Quick Limit Presets:**")
         with col_p1:
-            if st.button("500", key="p_btn_500", use_container_width=True):
-                st.session_state.scan_max_limit = 500
-                st.rerun()
+            st.button("500", key="p_btn_500", on_click=set_preset_limit, args=(500,), use_container_width=True)
         with col_p2:
-            if st.button("1,000", key="p_btn_1000", use_container_width=True):
-                st.session_state.scan_max_limit = 1000
-                st.rerun()
+            st.button("1,000", key="p_btn_1000", on_click=set_preset_limit, args=(1000,), use_container_width=True)
         with col_p3:
-            if st.button("2,500", key="p_btn_2500", use_container_width=True):
-                st.session_state.scan_max_limit = 2500
-                st.rerun()
+            st.button("2,500", key="p_btn_2500", on_click=set_preset_limit, args=(2500,), use_container_width=True)
         with col_p4:
-            if st.button("5,000", key="p_btn_5000", use_container_width=True):
-                st.session_state.scan_max_limit = 5000
-                st.rerun()
+            st.button("5,000", key="p_btn_5000", on_click=set_preset_limit, args=(5000,), use_container_width=True)
         with col_p5:
-            if st.button("10,000 🚀", key="p_btn_10000", type="primary" if st.session_state.scan_max_limit == 10000 else "secondary", use_container_width=True):
-                st.session_state.scan_max_limit = 10000
-                st.rerun()
+            is_active_10k = st.session_state.get("max_emails_input") == 10000
+            st.button(
+                "10,000 🚀",
+                key="p_btn_10000",
+                type="primary" if is_active_10k else "secondary",
+                on_click=set_preset_limit,
+                args=(10000,),
+                use_container_width=True,
+            )
         with col_p6:
-            if st.button("25,000", key="p_btn_25000", use_container_width=True):
-                st.session_state.scan_max_limit = 25000
-                st.rerun()
+            st.button("25,000", key="p_btn_25000", on_click=set_preset_limit, args=(25000,), use_container_width=True)
 
         btn_scan = st.button(f"▶️ Run Dry-Run Scan on {active_account_email} (Up to {max_emails:,} Emails)", type="primary")
 
