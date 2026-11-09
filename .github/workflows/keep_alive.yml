@@ -1,0 +1,23 @@
+name: Keep Streamlit App Warm & Awake
+
+on:
+  schedule:
+    # Runs every 14 minutes (0, 14, 28, 42, 56) to prevent Streamlit from sleeping
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
+
+jobs:
+  ping-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Streamlit Health Endpoint
+        run: |
+          echo "Pinging Streamlit app health endpoint..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://spam-email-deleter.streamlit.app/_stcore/health)
+          echo "HTTP Response Status: $STATUS"
+          if [ "$STATUS" -eq 200 ]; then
+            echo "✅ Streamlit app is alive and healthy!"
+          else
+            echo "⚠️ Non-200 response received: $STATUS. App might be waking up."
+          fi

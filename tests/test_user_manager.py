@@ -117,6 +117,50 @@ def test_legacy_schema_migration():
 
     print("Legacy schema auto-migration test passed successfully!")
 
+def test_device_sessions_lifecycle():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        db_path = temp_path / "session_users.db"
+        user_mgr = UserManager(
+            db_path=db_path,
+            data_dir=temp_path / "data",
+            secret_key_path=temp_path / "secret.key",
+        )
+
+        ok, msg, user = user_mgr.create_user("sessiontest@gmail.com", "testpass123")
+        assert ok
+
+        # 1. Create device session
+        token = user_mgr.create_session(user["id"])
+        assert token and len(token) > 20
+
+        # 2. Validate session
+        valid_user = user_mgr.validate_session(token)
+        assert valid_user is not None
+        assert valid_user["id"] == user["id"]
+        assert valid_user["gmail"] == "sessiontest@gmail.com"
+
+        # 3. Invalid token returns None
+        assert user_mgr.validate_session("fake_token_12345") is None
+
+        # 4. Revoke session upon logout
+        assert user_mgr.revoke_session(token)
+        # Now validation fails
+        assert user_mgr.validate_session(token) is None
+
+        # 5. Multiple sessions & revoke_all
+        t1 = user_mgr.create_session(user["id"])
+        t2 = user_mgr.create_session(user["id"])
+        assert user_mgr.validate_session(t1) is not None
+        assert user_mgr.validate_session(t2) is not None
+
+        user_mgr.revoke_all_sessions(user["id"])
+        assert user_mgr.validate_session(t1) is None
+        assert user_mgr.validate_session(t2) is None
+
+    print("Device session lifecycle tests passed successfully!")
+
 if __name__ == "__main__":
     test_user_manager_full_lifecycle()
     test_legacy_schema_migration()
+    test_device_sessions_lifecycle()

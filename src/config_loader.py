@@ -10,8 +10,8 @@ CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 class GeneralSettings(BaseModel):
     trash_only: bool = True
-    batch_size: int = 50
-    max_emails_to_scan: int = 200
+    batch_size: int = 100
+    max_emails_to_scan: int = 10000
     audit_logging: bool = True
 
 class DetectionSettings(BaseModel):

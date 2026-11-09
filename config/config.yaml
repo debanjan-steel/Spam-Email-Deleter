@@ -5,10 +5,10 @@ general:
   trash_only: true
   
   # Default number of emails to retrieve per scan batch
-  batch_size: 50
+  batch_size: 100
   
-  # Maximum emails to inspect per single scan run
-  max_emails_to_scan: 200
+  # Maximum emails to inspect per single scan run (can scan up to 50,000)
+  max_emails_to_scan: 10000
   
   # Automatically log all actions in local SQLite database for rollback
   audit_logging: true

@@ -138,6 +138,13 @@ The **Intelligent Spam Email Deleter** is an automated mail-cleaning Progressive
   - `Dockerfile` for Docker-compatible clouds (Render, Railway, Fly, Cloud Run).
   - `supabase_schema.sql` for Supabase Postgres storage.
 - [x] 🟢 **Task 4.5**: Unit tests in `tests/test_engine.py` (6/6 tests passing).
+- [x] 🟢 **Task 4.6**: High-Volume Scanning & Batch Deletion Engine (`10,000+` emails):
+  - Raised UI scan ceiling from 500 to 50,000 emails with 1-click presets (`500`, `1,000`, `2,500`, `5,000`, `10,000`, `25,000`).
+  - High-throughput IMAP connector with persistent connection reuse and chunked multi-message `FETCH` commands (eliminating Google IMAP connection throttling).
+  - Gmail API connector pagination across pages using `pageToken` up to `max_results`.
+  - Batch trashing (`trash_messages_batch`) and undo restore (`untrash_messages_batch`) with real-time progress indicators.
+  - Responsive results table filtering (`🎯 Deletion Candidates`, `📋 All Scanned`, `🛡️ Safe & Protected`) to keep browser memory snappy with 10,000+ rows.
+  - Unit test verification in `tests/test_high_volume_batch.py`.
 
 ---
 

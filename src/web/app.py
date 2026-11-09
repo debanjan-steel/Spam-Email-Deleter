@@ -218,11 +218,69 @@ user_mgr: UserManager = UserManager()
 # Check Authentication Status
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
+if "active_session_token" not in st.session_state:
+    st.session_state.active_session_token = None
+
+# Handle URL Session Auto-Login
+url_token = st.query_params.get("session_token")
+if not st.session_state.current_user and url_token:
+    u_data = user_mgr.validate_session(url_token)
+    if u_data:
+        st.session_state.current_user = u_data
+        st.session_state.active_session_token = url_token
+        st.session_state.active_account = None
+        st.session_state.scan_results = []
+        st.session_state.selected_mids = set()
+        st.query_params.clear()
+        st.rerun()
+    else:
+        # Invalid or expired session: clear parameter and mark for removal from client localStorage
+        st.query_params.clear()
+        st.session_state.clear_device_token = True
 
 if not st.session_state.current_user:
     # ---------------------------------------------------------
     # AUTHENTICATION SCREEN: LOGIN & CREATE ACCOUNT
     # ---------------------------------------------------------
+
+    # 1. Clear device token from localStorage if logged out or token expired
+    if st.session_state.get("clear_device_token"):
+        st.session_state.pop("clear_device_token")
+        clear_storage_js = """
+        <script>
+        try {
+            window.parent.localStorage.removeItem('mail_guard_device_token');
+            const url = new URL(window.parent.location.href);
+            if (url.searchParams.has('session_token')) {
+                url.searchParams.delete('session_token');
+                window.parent.history.replaceState({}, '', url.href);
+            }
+        } catch (e) {
+            console.error('Error clearing device token:', e);
+        }
+        </script>
+        """
+        components.html(clear_storage_js, height=0, width=0)
+    else:
+        # 2. Check client localStorage for persistent device session
+        check_storage_js = """
+        <script>
+        try {
+            const token = window.parent.localStorage.getItem('mail_guard_device_token');
+            if (token) {
+                const url = new URL(window.parent.location.href);
+                if (!url.searchParams.has('session_token')) {
+                    url.searchParams.set('session_token', token);
+                    window.parent.location.href = url.href;
+                }
+            }
+        } catch (e) {
+            console.error('LocalStorage access error:', e);
+        }
+        </script>
+        """
+        components.html(check_storage_js, height=0, width=0)
+
     col_l, col_main, col_r = st.columns([1, 2, 1])
     with col_main:
         st.markdown("<h1 style='text-align: center;'>🛡️ Mail Guard</h1>", unsafe_allow_html=True)
@@ -245,7 +303,11 @@ if not st.session_state.current_user:
             if btn_login:
                 ok, msg, u_data = user_mgr.authenticate(login_gmail, login_pass)
                 if ok:
+                    # Issue persistent device session token
+                    device_tok = user_mgr.create_session(u_data["id"])
                     st.session_state.current_user = u_data
+                    st.session_state.active_session_token = device_tok
+                    st.session_state.set_device_token = device_tok
                     st.session_state.active_account = None
                     st.session_state.scan_results = []
                     st.session_state.selected_mids = set()
@@ -285,7 +347,11 @@ if not st.session_state.current_user:
                 else:
                     ok, msg, u_data = user_mgr.create_user(reg_gmail, reg_pass)
                     if ok:
+                        # Issue persistent device session token
+                        device_tok = user_mgr.create_session(u_data["id"])
                         st.session_state.current_user = u_data
+                        st.session_state.active_session_token = device_tok
+                        st.session_state.set_device_token = device_tok
                         st.session_state.active_account = None
                         st.session_state.scan_results = []
                         st.session_state.selected_mids = set()
@@ -297,9 +363,10 @@ if not st.session_state.current_user:
         st.divider()
         st.markdown("""
         🔒 **Multi-User Isolation & Privacy Guaranteed**:
-        - **Private Gmail Mailboxes**: Your connected Gmail accounts and App Passwords are saved only in your private workspace. Other users on this app cannot see or access them.
+        - **Persistent Device Login**: Stay logged in on your private phone or laptop until you manually tap Logout.
+        - **Safe Link Sharing**: If you share this app link with a friend, they will see a fresh login page to create their own isolated account.
+        - **Private Gmail Mailboxes**: Connected Gmail accounts and App Passwords are saved only in your private workspace.
         - **Custom Rules & Whitelists**: Your protected senders and custom blacklist keywords are completely isolated.
-        - **Personal Audit History**: Deletion history and 1-click restore logs are strictly private to your account.
         """)
 
     st.stop()
@@ -308,6 +375,26 @@ if not st.session_state.current_user:
 # USER IS AUTHENTICATED: LOAD USER-ISOLATED WORKSPACE
 # -------------------------------------------------------------
 current_user = st.session_state.current_user
+
+# Persist device token to browser localStorage if newly authenticated
+if st.session_state.get("set_device_token"):
+    tok_to_store = st.session_state.pop("set_device_token")
+    save_storage_js = f"""
+    <script>
+    try {{
+        window.parent.localStorage.setItem('mail_guard_device_token', '{tok_to_store}');
+        const url = new URL(window.parent.location.href);
+        if (url.searchParams.has('session_token')) {{
+            url.searchParams.delete('session_token');
+            window.parent.history.replaceState({{}}, '', url.href);
+        }}
+    }} catch (e) {{
+        console.error('Error saving device token:', e);
+    }}
+    </script>
+    """
+    components.html(save_storage_js, height=0, width=0)
+
 user_paths = user_mgr.get_user_paths(current_user["id"])
 
 # Initialize Managers scoped exclusively to the active user's sandbox
@@ -348,10 +435,16 @@ with st.sidebar:
         st.markdown(f"👤 **{current_user.get('gmail', current_user.get('username', 'Account'))}**")
     with col_u2:
         if st.button("🚪 Logout", key="btn_user_logout", use_container_width=True):
+            active_tok = st.session_state.get("active_session_token")
+            if active_tok:
+                user_mgr.revoke_session(active_tok)
             st.session_state.current_user = None
             st.session_state.active_account = None
+            st.session_state.active_session_token = None
             st.session_state.scan_results = []
             st.session_state.selected_mids = set()
+            st.session_state.clear_device_token = True
+            st.query_params.clear()
             st.rerun()
 
     st.caption("Multi-User Gmail Cleaner & Spam Deleter")
@@ -471,7 +564,10 @@ with tab_scan:
                 st.session_state.selected_folders = []
                 st.rerun()
 
-        col1, col2, col3 = st.columns([2.5, 1, 1.2])
+        if "scan_max_limit" not in st.session_state:
+            st.session_state.scan_max_limit = 1000
+
+        col1, col2, col3 = st.columns([2.5, 1.2, 1.3])
         with col1:
             folders_to_scan = st.multiselect(
                 "Select Folders / Labels to Scan",
@@ -486,11 +582,14 @@ with tab_scan:
             max_emails = st.number_input(
                 "Max Emails to Fetch",
                 min_value=10,
-                max_value=500,
-                value=50,
-                step=25,
-                help="Total maximum emails to fetch across the selected categories."
+                max_value=50000,
+                value=int(st.session_state.scan_max_limit),
+                step=250,
+                help="Total maximum emails to fetch across the selected categories. Supports up to 50,000 emails per scan.",
+                key="max_emails_input"
             )
+            st.session_state.scan_max_limit = max_emails
+
         with col3:
             custom_query = st.text_input(
                 "Optional Filter",
@@ -498,7 +597,36 @@ with tab_scan:
                 help="Optional Gmail search filter (e.g. is:unread, older_than:30d)."
             )
 
-        btn_scan = st.button(f"▶️ Run Dry-Run Scan on {active_account_email}", type="primary")
+        # Quick Preset Buttons for 1-Click Scan Limit Selection
+        col_pres_label, col_p1, col_p2, col_p3, col_p4, col_p5, col_p6 = st.columns([1.6, 1, 1, 1, 1, 1.2, 1.2])
+        with col_pres_label:
+            st.caption("⚡ **Quick Limit Presets:**")
+        with col_p1:
+            if st.button("500", key="p_btn_500", use_container_width=True):
+                st.session_state.scan_max_limit = 500
+                st.rerun()
+        with col_p2:
+            if st.button("1,000", key="p_btn_1000", use_container_width=True):
+                st.session_state.scan_max_limit = 1000
+                st.rerun()
+        with col_p3:
+            if st.button("2,500", key="p_btn_2500", use_container_width=True):
+                st.session_state.scan_max_limit = 2500
+                st.rerun()
+        with col_p4:
+            if st.button("5,000", key="p_btn_5000", use_container_width=True):
+                st.session_state.scan_max_limit = 5000
+                st.rerun()
+        with col_p5:
+            if st.button("10,000 🚀", key="p_btn_10000", type="primary" if st.session_state.scan_max_limit == 10000 else "secondary", use_container_width=True):
+                st.session_state.scan_max_limit = 10000
+                st.rerun()
+        with col_p6:
+            if st.button("25,000", key="p_btn_25000", use_container_width=True):
+                st.session_state.scan_max_limit = 25000
+                st.rerun()
+
+        btn_scan = st.button(f"▶️ Run Dry-Run Scan on {active_account_email} (Up to {max_emails:,} Emails)", type="primary")
 
         if btn_scan:
             try:
@@ -508,9 +636,9 @@ with tab_scan:
                 scorer = SpamScorer(whitelist_guard, custom_rules, config_mgr.app_config.detection)
 
                 all_mids = []
-                with st.spinner(f"Fetching message IDs from {active_account_email}..."):
+                with st.spinner(f"Discovering message IDs from {active_account_email}..."):
                     if folders_to_scan:
-                        per_folder_limit = max(10, max_emails // len(folders_to_scan) + 5) if len(folders_to_scan) > 1 else max_emails
+                        per_folder_limit = max(100, max_emails // len(folders_to_scan) + 50) if len(folders_to_scan) > 1 else max_emails
                         for label in folders_to_scan:
                             mids = connector.list_message_ids(
                                 query=custom_query or None,
@@ -529,14 +657,20 @@ with tab_scan:
                     st.info("No emails found matching the selected criteria.")
                     st.session_state.scan_results = []
                 else:
-                    with st.spinner(f"Analyzing {len(unique_mids)} emails with safety & spam rules..."):
-                        messages = connector.get_messages_batch(unique_mids)
-                        results = [scorer.evaluate(m) for m in messages]
-                        st.session_state.scan_results = results
-                        st.session_state.selected_mids = {
-                            r.message_id for r in results if r.action in ("TARGETED_TRASH", "SPAM_TRASH")
-                        }
-                    st.success(f"Scan complete! Evaluated {len(results)} emails.")
+                    scan_progress = st.progress(0, text="Fetching and analyzing emails...")
+                    def on_scan_progress(done, total):
+                        pct = min(1.0, max(0.0, done / max(total, 1)))
+                        scan_progress.progress(pct, text=f"Analyzing emails: {done:,} of {total:,} ({int(pct*100)}%)...")
+
+                    messages = connector.get_messages_batch(unique_mids, progress_callback=on_scan_progress)
+                    results = [scorer.evaluate(m) for m in messages]
+                    scan_progress.empty()
+
+                    st.session_state.scan_results = results
+                    st.session_state.selected_mids = {
+                        r.message_id for r in results if r.action in ("TARGETED_TRASH", "SPAM_TRASH")
+                    }
+                    st.success(f"Scan complete! Evaluated {len(results):,} emails.")
             except Exception as e:
                 st.error(f"Error during scan: {e}")
 
@@ -550,17 +684,37 @@ with tab_scan:
             manual_count = sum(1 for r in results if r.action == "TARGETED_TRASH")
             spam_count = sum(1 for r in results if r.action == "SPAM_TRASH")
             safe_count = sum(1 for r in results if r.action == "SAFE")
+            cand_count = manual_count + spam_count
 
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Total Scanned", total_count)
-            m2.metric("🛡️ Protected (Immune)", prot_count)
-            m3.metric("🎯 Custom Rule Matches", manual_count)
-            m4.metric("🚨 Auto-Detected Spam", spam_count)
-            m5.metric("✅ Safe / Normal", safe_count)
+            m1.metric("Total Scanned", f"{total_count:,}")
+            m2.metric("🛡️ Protected (Immune)", f"{prot_count:,}")
+            m3.metric("🎯 Custom Rule Matches", f"{manual_count:,}")
+            m4.metric("🚨 Auto-Detected Spam", f"{spam_count:,}")
+            m5.metric("✅ Safe / Normal", f"{safe_count:,}")
 
             st.subheader(f"Candidate Emails ({active_account_email})")
 
-            col_a, col_b, col_c = st.columns([1, 1, 2])
+            # Smart View Filter for Snappy Table Performance with Thousands of Emails
+            view_filter = st.radio(
+                "Filter View:",
+                [
+                    f"🎯 Deletion Candidates ({cand_count:,})",
+                    f"📋 All Scanned Emails ({total_count:,})",
+                    f"🛡️ Safe & Protected Emails ({safe_count + prot_count:,})",
+                ],
+                horizontal=True,
+                key="results_view_filter",
+            )
+
+            if "Deletion Candidates" in view_filter:
+                display_results = [r for r in results if r.action in ("TARGETED_TRASH", "SPAM_TRASH")]
+            elif "Safe & Protected" in view_filter:
+                display_results = [r for r in results if r.action in ("PROTECTED", "SAFE")]
+            else:
+                display_results = results
+
+            col_a, col_b, col_c = st.columns([1.2, 1, 2])
             with col_a:
                 if st.button("Select All Deletion Candidates"):
                     st.session_state.selected_mids = {
@@ -573,7 +727,7 @@ with tab_scan:
                     st.rerun()
 
             table_data = []
-            for r in results:
+            for r in display_results:
                 is_checked = r.message_id in st.session_state.selected_mids
                 action_badge = {
                     "PROTECTED": "🛡️ Immune",
@@ -612,44 +766,60 @@ with tab_scan:
                 column_config=column_config,
                 hide_index=True,
                 use_container_width=True,
-                key="results_editor"
+                key=f"results_editor_{view_filter[:4]}"
             )
 
-            new_selected = set(
-                edited_df[edited_df["Select"] == True]["Message ID"].tolist()
-            )
-            st.session_state.selected_mids = new_selected
+            # Preserve selection state accurately across filtered views
+            checked_in_view = set(edited_df[edited_df["Select"] == True]["Message ID"].tolist())
+            unchecked_in_view = set(edited_df[edited_df["Select"] == False]["Message ID"].tolist())
+            st.session_state.selected_mids = (st.session_state.selected_mids - unchecked_in_view) | checked_in_view
 
-            st.write(f"**{len(new_selected)} emails selected for deletion in {active_account_email}.**")
+            total_selected = len(st.session_state.selected_mids)
+            st.write(f"**{total_selected:,} emails selected for deletion in {active_account_email}.**")
 
-            if new_selected:
-                if st.button(f"🗑️ Move {len(new_selected)} Selected Emails to Trash ({active_account_email})", type="primary"):
+            if total_selected:
+                if st.button(f"🗑️ Move {total_selected:,} Selected Emails to Trash ({active_account_email})", type="primary"):
                     try:
                         connector = auth.get_connector_for_account(active_account_email)
                         batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
                         
                         trashed_results = []
-                        with st.spinner(f"Moving {len(new_selected)} emails to Trash in {active_account_email}..."):
-                            for r in results:
-                                if r.message_id in new_selected:
-                                    success = connector.trash_message(r.message_id)
-                                    if success:
-                                        trashed_results.append(r)
+                        trash_progress = st.progress(0, text="Moving emails to Trash...")
+                        def on_trash_progress(done, total):
+                            pct = min(1.0, max(0.0, done / max(total, 1)))
+                            trash_progress.progress(pct, text=f"Moving to Trash: {done:,} of {total:,} ({int(pct*100)}%)...")
 
-                        audit_logger.record_batch(
-                            batch_id,
-                            trashed_results,
-                            account_email=active_account_email,
-                            action_type="TRASH"
-                        )
-                        
-                        st.success(f"Moved {len(trashed_results)} emails to Trash in `{active_account_email}`! Batch ID: `{batch_id}`")
-                        st.info("You can undo this anytime in the 'Audit Log & Undo' tab.")
-                        
+                        target_mids = list(st.session_state.selected_mids)
+                        if hasattr(connector, "trash_messages_batch"):
+                            trashed_mids_list = connector.trash_messages_batch(target_mids, progress_callback=on_trash_progress)
+                            trashed_set = set(trashed_mids_list)
+                            trashed_results = [r for r in results if r.message_id in trashed_set]
+                        else:
+                            for idx, r in enumerate(results):
+                                if r.message_id in st.session_state.selected_mids:
+                                    if connector.trash_message(r.message_id):
+                                        trashed_results.append(r)
+                                    on_trash_progress(idx + 1, total_selected)
+
+                        trash_progress.empty()
+
+                        if trashed_results:
+                            audit_logger.record_batch(
+                                batch_id,
+                                trashed_results,
+                                account_email=active_account_email,
+                                action_type="TRASH"
+                            )
+                            st.success(f"Moved {len(trashed_results):,} emails to Trash in `{active_account_email}`! Batch ID: `{batch_id}`")
+                            st.info("You can undo this anytime in the 'Audit Log & Undo' tab.")
+                        else:
+                            st.warning("No emails were moved to trash.")
+
+                        trashed_mid_set = {r.message_id for r in trashed_results}
                         st.session_state.scan_results = [
-                            r for r in results if r.message_id not in new_selected
+                            r for r in results if r.message_id not in trashed_mid_set
                         ]
-                        st.session_state.selected_mids = set()
+                        st.session_state.selected_mids -= trashed_mid_set
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to move items to trash: {e}")
@@ -925,15 +1095,27 @@ with tab_audit:
                             try:
                                 connector = auth.get_connector_for_account(b_acc)
                                 entries = audit_logger.get_batch_entries(bid)
-                                
-                                with st.spinner(f"Restoring {len(entries)} emails from Trash in {b_acc}..."):
+                                total_to_restore = len(entries)
+                                entry_mids = [e["message_id"] for e in entries]
+
+                                restore_progress = st.progress(0, text=f"Restoring emails in {b_acc}...")
+                                def on_restore_progress(done, total):
+                                    pct = min(1.0, max(0.0, done / max(total, 1)))
+                                    restore_progress.progress(pct, text=f"Restoring emails: {done:,} of {total:,} ({int(pct*100)}%)...")
+
+                                if hasattr(connector, "untrash_messages_batch"):
+                                    restored_mids = connector.untrash_messages_batch(entry_mids, progress_callback=on_restore_progress)
+                                    restored = len(restored_mids)
+                                else:
                                     restored = 0
-                                    for entry in entries:
-                                        if connector.untrash_message(entry["message_id"]):
+                                    for idx, mid in enumerate(entry_mids):
+                                        if connector.untrash_message(mid):
                                             restored += 1
-                                
+                                        on_restore_progress(idx + 1, total_to_restore)
+
+                                restore_progress.empty()
                                 audit_logger.mark_batch_restored(bid)
-                                st.success(f"Restored {restored} emails back in `{b_acc}`!")
+                                st.success(f"Restored {restored:,} emails back in `{b_acc}`!")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Failed to restore batch: {e}")
@@ -979,7 +1161,11 @@ with tab_settings:
             with st.spinner("Updating password..."):
                 ok, msg = user_mgr.change_password(current_user["id"], old_pass, new_pass)
             if ok:
+                new_tok = user_mgr.create_session(current_user["id"])
+                st.session_state.active_session_token = new_tok
+                st.session_state.set_device_token = new_tok
                 st.success(f"🎉 {msg}")
+                st.rerun()
             else:
                 st.error(msg)
 
@@ -1006,8 +1192,11 @@ with tab_settings:
             if ok:
                 st.session_state.current_user = None
                 st.session_state.active_account = None
+                st.session_state.active_session_token = None
+                st.session_state.clear_device_token = True
                 st.session_state.scan_results = []
                 st.session_state.selected_mids = set()
+                st.query_params.clear()
                 st.success(msg)
                 st.rerun()
             else:

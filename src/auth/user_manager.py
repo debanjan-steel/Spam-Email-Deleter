@@ -10,6 +10,7 @@ from email.mime.text import MIMEText
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import smtplib
 import sqlite3
@@ -75,6 +76,15 @@ class UserManager:
                     gmail TEXT UNIQUE NOT NULL,
                     password_encrypted TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    token TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_active TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES app_users(id)
                 )
             """)
             conn.commit()
@@ -192,6 +202,80 @@ class UserManager:
             "created_at": row["created_at"],
         }
         return True, f"Welcome back, {row['gmail']}!", user_info
+
+    def create_session(self, user_id: str) -> str:
+        """Creates and stores a persistent device session token for a user.
+        
+        Returns:
+            device_session_token (str)
+        """
+        token = secrets.token_urlsafe(32)
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_sessions (token, user_id, created_at, last_active)
+                VALUES (?, ?, ?, ?)
+                """,
+                (token, user_id, now_str, now_str),
+            )
+            conn.commit()
+        return token
+
+    def validate_session(self, token: str) -> Optional[Dict[str, Any]]:
+        """Validates a persistent session token. Updates last_active and returns user info if valid."""
+        if not token or not isinstance(token, str):
+            return None
+
+        clean_token = token.strip()
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT u.id, u.gmail, u.created_at, s.last_active
+                FROM user_sessions s
+                JOIN app_users u ON s.user_id = u.id
+                WHERE s.token = ?
+                """,
+                (clean_token,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            # Update last_active timestamp
+            cursor.execute(
+                "UPDATE user_sessions SET last_active = ? WHERE token = ?",
+                (now_str, clean_token),
+            )
+            conn.commit()
+
+        return {
+            "id": row["id"],
+            "gmail": row["gmail"],
+            "created_at": row["created_at"],
+        }
+
+    def revoke_session(self, token: str) -> bool:
+        """Revokes / destroys a single device session token upon logout."""
+        if not token:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_sessions WHERE token = ?", (token.strip(),))
+            conn.commit()
+        return True
+
+    def revoke_all_sessions(self, user_id: str) -> bool:
+        """Revokes all active sessions for a user (e.g. on password change or account deletion)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+            conn.commit()
+        return True
 
     def recover_password(self, gmail: str) -> Tuple[bool, str, Optional[str]]:
         """Retrieves user's exact password and sends an email to their Gmail address.
@@ -313,6 +397,9 @@ Spam Email Deleter Guard Team
             )
             conn.commit()
 
+        # Invalidate existing device sessions on password change
+        self.revoke_all_sessions(user_id)
+
         return True, "Password updated successfully!"
 
     def delete_user(self, user_id: str) -> Tuple[bool, str]:
@@ -321,6 +408,9 @@ Spam Email Deleter Guard Team
         Returns:
             (success, message)
         """
+        # Revoke all active sessions
+        self.revoke_all_sessions(user_id)
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM app_users WHERE id = ?", (user_id,))

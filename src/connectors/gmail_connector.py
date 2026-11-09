@@ -1,9 +1,10 @@
 """Gmail Connector for retrieving, inspecting, trashing, and restoring messages.
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 import email.utils
 
 from googleapiclient.discovery import Resource
@@ -71,10 +72,11 @@ class GmailConnector:
         label_ids: Optional[List[str]] = None,
         max_results: int = 50,
     ) -> List[str]:
-        """Retrieves a list of message IDs matching the label or search query."""
+        """Retrieves a list of message IDs matching the label or search query,
+        paginating through Gmail API pages until max_results is satisfied.
+        """
         params: Dict[str, Any] = {
             "userId": "me",
-            "maxResults": min(max_results, 500),
         }
         
         q_parts = []
@@ -102,9 +104,31 @@ class GmailConnector:
         if q_parts:
             params["q"] = " ".join(q_parts)
 
-        result = self.service.users().messages().list(**params).execute()
-        messages = result.get("messages", [])
-        return [m["id"] for m in messages]
+        messages = []
+        page_token = None
+        while len(messages) < max_results:
+            page_size = min(max_results - len(messages), 500)
+            params["maxResults"] = page_size
+            if page_token:
+                params["pageToken"] = page_token
+            elif "pageToken" in params:
+                del params["pageToken"]
+
+            try:
+                result = self.service.users().messages().list(**params).execute()
+            except Exception:
+                break
+
+            batch = result.get("messages", [])
+            if not batch:
+                break
+            messages.extend(batch)
+
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+
+        return [m["id"] for m in messages[:max_results]]
 
     def get_message(self, message_id: str) -> Optional[EmailMessage]:
         """Retrieves full metadata and parsed properties for a single message."""
@@ -156,14 +180,83 @@ class GmailConnector:
         except Exception:
             return None
 
-    def get_messages_batch(self, message_ids: List[str]) -> List[EmailMessage]:
-        """Retrieves full details for a list of message IDs."""
-        messages: List[EmailMessage] = []
-        for mid in message_ids:
-            msg = self.get_message(mid)
-            if msg:
-                messages.append(msg)
-        return messages
+    def get_messages_batch(
+        self,
+        message_ids: List[str],
+        max_workers: int = 10,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[EmailMessage]:
+        """Retrieves full details for a list of message IDs in parallel."""
+        if not message_ids:
+            return []
+
+        results_dict: Dict[str, EmailMessage] = {}
+        total = len(message_ids)
+        completed = 0
+
+        # For smaller batches, run sequentially to avoid thread overhead
+        if total <= 5:
+            for mid in message_ids:
+                msg = self.get_message(mid)
+                if msg:
+                    results_dict[mid] = msg
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total)
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {executor.submit(self.get_message, mid): mid for mid in message_ids}
+                for future in as_completed(future_to_id):
+                    mid = future_to_id[future]
+                    completed += 1
+                    try:
+                        msg = future.result()
+                        if msg:
+                            results_dict[mid] = msg
+                    except Exception:
+                        pass
+                    if progress_callback:
+                        progress_callback(completed, total)
+
+        return [results_dict[mid] for mid in message_ids if mid in results_dict]
+
+    def trash_messages_batch(
+        self,
+        message_ids: List[str],
+        max_workers: int = 10,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[str]:
+        """Safely moves a batch of messages to the Gmail Trash in parallel."""
+        if not message_ids:
+            return []
+
+        trashed = []
+        total = len(message_ids)
+        completed = 0
+
+        if total <= 5:
+            for mid in message_ids:
+                if self.trash_message(mid):
+                    trashed.append(mid)
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total)
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {executor.submit(self.trash_message, mid): mid for mid in message_ids}
+                for future in as_completed(future_to_id):
+                    mid = future_to_id[future]
+                    completed += 1
+                    try:
+                        ok = future.result()
+                        if ok:
+                            trashed.append(mid)
+                    except Exception:
+                        pass
+                    if progress_callback:
+                        progress_callback(completed, total)
+
+        return trashed
 
     def trash_message(self, message_id: str) -> bool:
         """Safely moves a message to the Gmail Trash (retains for 30 days)."""
@@ -172,6 +265,44 @@ class GmailConnector:
             return True
         except Exception:
             return False
+
+    def untrash_messages_batch(
+        self,
+        message_ids: List[str],
+        max_workers: int = 10,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[str]:
+        """Restores a batch of messages from Trash back in parallel."""
+        if not message_ids:
+            return []
+
+        restored = []
+        total = len(message_ids)
+        completed = 0
+
+        if total <= 5:
+            for mid in message_ids:
+                if self.untrash_message(mid):
+                    restored.append(mid)
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total)
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {executor.submit(self.untrash_message, mid): mid for mid in message_ids}
+                for future in as_completed(future_to_id):
+                    mid = future_to_id[future]
+                    completed += 1
+                    try:
+                        ok = future.result()
+                        if ok:
+                            restored.append(mid)
+                    except Exception:
+                        pass
+                    if progress_callback:
+                        progress_callback(completed, total)
+
+        return restored
 
     def untrash_message(self, message_id: str) -> bool:
         """Restores a message from Trash back to its original state."""
