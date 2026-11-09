@@ -22,9 +22,9 @@ class DetectionSettings(BaseModel):
     ai_model: str = "gemini-2.5-flash"
     expire_old_security_alerts: bool = True
     security_alerts_retention_days: int = 14
-    expire_old_categories: bool = True
+    expire_old_categories: bool = False
     categories_retention_days: int = 14
-    expired_categories: list = Field(default_factory=lambda: ["promotions", "social", "purchases"])
+    expired_categories: list = Field(default_factory=list)
 
 class StorageSettings(BaseModel):
     audit_db_path: str = "audit_log.db"

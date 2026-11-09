@@ -88,32 +88,10 @@ class SpamScorer:
                     date_str=message.date_str,
                     score=1.0,
                     action="TARGETED_TRASH",
-                    reason=f"Expired Security Alert: Sign-in/login notice from {provider} is {int(age_days)} days old (exceeds {self.settings.security_alerts_retention_days}-day safety retention limit)",
+                    reason=f"Expired 1-Time Alert: Sign-in/login notice from {provider} is {int(age_days)} days old (exceeds {self.settings.security_alerts_retention_days}-day safety retention limit)",
                     is_protected=False,
                     labels=message.labels,
                 )
-
-        # Special Rule: Ephemeral Category Expiration (Promotion, Social, Purchases)
-        # Promotional newsletters, social updates, and purchases/orders older than retention days are targeted for cleanup.
-        if self.settings.expire_old_categories:
-            cat = get_message_ephemeral_category(message)
-            if cat and cat in self.settings.expired_categories:
-                age_days = get_message_age_days(message)
-                if age_days is not None and age_days > self.settings.categories_retention_days:
-                    cat_name = cat.capitalize()
-                    return ClassificationResult(
-                        message_id=message.id,
-                        thread_id=message.thread_id,
-                        subject=message.subject,
-                        sender=message.sender,
-                        sender_email=message.sender_email,
-                        date_str=message.date_str,
-                        score=1.0,
-                        action="TARGETED_TRASH",
-                        reason=f"Expired Category: {cat_name} email is {int(age_days)} days old (exceeds {self.settings.categories_retention_days}-day safety retention limit)",
-                        is_protected=False,
-                        labels=message.labels,
-                    )
 
         # TIER 2: Check User-Defined Manual Targeted Rules (Manual Blacklist)
         is_manual, manual_reason = self.custom_rules.check_match(message)

@@ -103,8 +103,64 @@ ALERT_EXCLUSIONS = [
     "tax document", "subscription renewed", "subscription confirmation",
     "promo code", "discount code", "coupon",
     "pull request", "issue #", "new issue", "merged #", "pushed to",
-    "created a branch", "release v", "workflow run"
+    "created a branch", "release v", "workflow run",
+    "recording", "recorded", "zoom", "loom", "video", "replay", "webinar",
+    "transcript", "drive.google.com", "docs.google.com", "dropbox", "onedrive",
+    "box.com", "wetransfer", "shared a link", "here is the link", "attached", "attachment"
 ]
+
+# Keywords indicating recordings, shared links, files, and critical media/resources
+RECORDING_AND_RESOURCE_KEYWORDS = [
+    # Video & Audio Recordings
+    "recording",
+    "recorded",
+    "zoom recording",
+    "cloud recording",
+    "loom",
+    "meeting recording",
+    "call recording",
+    "audio recording",
+    "video recording",
+    "webinar recording",
+    "webinar replay",
+    "replay",
+    "podcast",
+    "transcript",
+    # Shared links, files, cloud documents
+    "drive.google.com",
+    "docs.google.com",
+    "sheets.google.com",
+    "slides.google.com",
+    "dropbox.com",
+    "onedrive",
+    "sharepoint",
+    "box.com",
+    "wetransfer",
+    "notion.so",
+    "figma.com",
+    "sent you a link",
+    "shared a link",
+    "here is the link",
+    "link to the",
+    "link to view",
+    "access the link",
+    "shared a file",
+    "shared a document",
+    "attached file",
+    "attachment",
+    "please find attached",
+]
+
+def is_recording_or_resource_message(message: EmailMessage) -> Tuple[bool, str]:
+    """Detects whether an email contains a recording, shared link, video, or important file."""
+    subject_lower = (message.subject or "").lower()
+    snippet_lower = (message.snippet or "").lower()
+    content_lower = f"{subject_lower} {snippet_lower}"
+
+    for kw in RECORDING_AND_RESOURCE_KEYWORDS:
+        if kw in content_lower:
+            return True, kw
+    return False, ""
 
 def get_alert_provider_name(message: EmailMessage) -> str:
     """Extracts a friendly brand/provider name for the security alert notice."""
@@ -284,7 +340,7 @@ class WhitelistGuard:
         config: WhitelistConfig,
         expire_security_alerts: bool = True,
         security_alerts_retention_days: int = 14,
-        expire_categories: bool = True,
+        expire_categories: bool = False,
         categories_retention_days: int = 14,
         expired_categories: Optional[List[str]] = None,
     ):
@@ -293,7 +349,8 @@ class WhitelistGuard:
         self.security_alerts_retention_days = security_alerts_retention_days
         self.expire_categories = expire_categories
         self.categories_retention_days = categories_retention_days
-        self.expired_categories = expired_categories or ["promotions", "social", "purchases"]
+        self.expired_categories = expired_categories or []
+        self.recording_senders: set = set()
         self._normalize()
 
     def _normalize(self) -> None:
@@ -318,9 +375,22 @@ class WhitelistGuard:
         if flags.protect_starred and message.is_starred:
             return True, "Protected: Starred / Flagged by user"
 
-        # Special Safeguard: Ephemeral Security & Sign-In Alerts Expiration
-        # Automated login notices and security alerts (from Google, GitHub, Microsoft, Apple, etc.)
-        # are critical when recent, but become obsolete after the retention period.
+        # 2. Valuable Recordings & Shared Links Immunity
+        # Emails containing video/audio recordings (Zoom, Loom, recordings) or shared links/files (Drive, Docs, Dropbox, OneDrive)
+        # are granted absolute immunity, and their senders are remembered as trusted.
+        has_resource, resource_kw = is_recording_or_resource_message(message)
+        if has_resource:
+            if message.sender_email:
+                self.recording_senders.add(message.sender_email.lower())
+            return True, f"Protected: Contains valuable recording or link ('{resource_kw}')"
+
+        # 3. Trusted Sender Immunity (Senders who send recordings or links are protected)
+        if message.sender_email and message.sender_email.lower() in self.recording_senders:
+            return True, f"Protected: Trusted sender has sent recordings/links ({message.sender_email})"
+
+        # 4. Ephemeral 1-Time Security & Login Alerts Expiration
+        # ONLY 1-time throwaway notifications (login notices, new sign-in alerts, OTP verification codes)
+        # expire after the retention period.
         if self.expire_security_alerts and is_security_alert(message):
             age_days = get_message_age_days(message)
             if age_days is not None and age_days > self.security_alerts_retention_days:
@@ -332,29 +402,26 @@ class WhitelistGuard:
                 age_str = f"{int(age_days)}d old" if age_days is not None else "recent"
                 return True, f"Protected: Recent {provider} sign-in alert ({age_str}, within {self.security_alerts_retention_days}-day safety window)"
 
-        # Special Safeguard: Ephemeral Category Expiration (Promotion, Social, Purchases)
-        # Promotional newsletters, social updates, and purchases/order notifications
-        # are kept for the retention period (14 days) and expire thereafter.
+        # 5. Optional category expiration (disabled by default)
         if self.expire_categories:
             cat = get_message_ephemeral_category(message)
             if cat and cat in self.expired_categories:
                 age_days = get_message_age_days(message)
                 if age_days is not None and age_days > self.categories_retention_days:
-                    # Expired category email: Intentionally NOT protected by domain whitelist!
                     return False, ""
                 else:
                     age_str = f"{int(age_days)}d old" if age_days is not None else "recent"
                     return True, f"Protected: Recent {cat.capitalize()} email ({age_str}, within {self.categories_retention_days}-day safety window)"
 
-        # 2. Important label check
+        # 6. Important label check
         if flags.protect_important and message.is_important:
             return True, "Protected: Marked Important by Gmail"
 
-        # 3. Direct sender whitelist check
+        # 7. Direct sender whitelist check
         if message.sender_email in self.senders_set:
             return True, f"Protected: Whitelisted sender ({message.sender_email})"
 
-        # 4. Domain whitelist check (e.g. .gov, .edu, google.com)
+        # 8. Domain whitelist check (e.g. .gov, .edu, google.com)
         for dom in self.domains_list:
             if dom.startswith("."):
                 if message.sender_domain.endswith(dom):
@@ -363,7 +430,7 @@ class WhitelistGuard:
                 if message.sender_domain == dom or message.sender_domain.endswith("." + dom):
                     return True, f"Protected: Whitelisted domain ({dom})"
 
-        # 5. Critical transactional keywords check (2FA, receipt, password reset, etc.)
+        # 9. Critical transactional keywords check (2FA, receipt, password reset, etc.)
         content_to_check = f"{message.subject} {message.snippet}".lower()
         for kw in self.keywords_list:
             if kw in content_to_check:

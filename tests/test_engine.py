@@ -213,7 +213,7 @@ def test_security_alerts_expiration_active():
     assert res_expired.is_protected is False
     assert res_expired.action == "TARGETED_TRASH"
     assert res_expired.score == 1.0
-    assert "Expired Security Alert" in res_expired.reason
+    assert "Expired" in res_expired.reason and "Alert" in res_expired.reason
 
     # 3. Expired security alert that user explicitly STARRED -> MUST REMAIN PROTECTED
     starred_alert = create_sample_message(
@@ -404,161 +404,133 @@ def test_github_and_multiplatform_login_alerts_expiration():
     assert res_discord.action == "TARGETED_TRASH"
     assert "Discord" in res_discord.reason
 
-def test_category_expiration_promotions_social_purchases():
-    """Verify that emails in Promotions, Social, and Purchases are kept for 14 days and then trashed."""
-    wl_config = WhitelistConfig(
-        protected_domains=["google.com", "amazon.com", "linkedin.com"],
-        protected_keywords=["receipt", "order confirmation"]
-    )
-    guard = WhitelistGuard(
-        wl_config,
-        expire_categories=True,
-        categories_retention_days=14,
-        expired_categories=["promotions", "social", "purchases"]
-    )
-    scorer = SpamScorer(
-        guard,
-        CustomRulesMatcher(CustomRulesConfig()),
-        DetectionSettings(
-            expire_old_categories=True,
-            categories_retention_days=14,
-            expired_categories=["promotions", "social", "purchases"]
-        )
-    )
-
+def test_recordings_and_links_immunity():
+    """Verify that emails containing recordings or shared links are permanently immune."""
+    wl_config = WhitelistConfig()
+    guard = WhitelistGuard(wl_config, expire_security_alerts=True, security_alerts_retention_days=14)
+    scorer = SpamScorer(guard, CustomRulesMatcher(CustomRulesConfig()), DetectionSettings())
     now = datetime.now(timezone.utc)
 
-    # 1. Recent Promotion (5 days old) -> MUST BE PROTECTED
-    promo_recent = create_sample_message(
-        mid="promo_recent_1",
-        sender="Nike Store",
-        sender_email="news@nike.com",
-        sender_domain="nike.com",
-        subject="Exclusive Weekend Sale: 30% off sneakers",
-        snippet="Check out our latest flash sale",
-        labels=["CATEGORY_PROMOTIONS"],
-        has_list_unsub=True,
-        date=now - timedelta(days=5),
-    )
-    res_promo_recent = scorer.evaluate(promo_recent)
-    assert res_promo_recent.is_protected is True
-    assert res_promo_recent.action == "PROTECTED"
-    assert "Promotions" in res_promo_recent.reason
-
-    # 2. Expired Promotion (25 days old) -> MUST BE TARGETED_TRASH
-    promo_old = create_sample_message(
-        mid="promo_old_1",
-        sender="Nike Store",
-        sender_email="news@nike.com",
-        sender_domain="nike.com",
-        subject="Exclusive Weekend Sale: 30% off sneakers",
-        snippet="Check out our latest flash sale",
-        labels=["CATEGORY_PROMOTIONS"],
-        has_list_unsub=True,
-        date=now - timedelta(days=25),
-    )
-    res_promo_old = scorer.evaluate(promo_old)
-    assert res_promo_old.is_protected is False
-    assert res_promo_old.action == "TARGETED_TRASH"
-    assert res_promo_old.score == 1.0
-    assert "Promotions" in res_promo_old.reason
-
-    # 3. Recent Social update (3 days old) -> MUST BE PROTECTED
-    social_recent = create_sample_message(
-        mid="social_recent_1",
-        sender="LinkedIn",
-        sender_email="updates@linkedin.com",
-        sender_domain="linkedin.com",
-        subject="You have 3 new notifications on LinkedIn",
-        snippet="See who viewed your profile",
-        labels=["CATEGORY_SOCIAL"],
-        date=now - timedelta(days=3),
-    )
-    res_social_recent = scorer.evaluate(social_recent)
-    assert res_social_recent.is_protected is True
-    assert res_social_recent.action == "PROTECTED"
-    assert "Social" in res_social_recent.reason
-
-    # 4. Expired Social update (21 days old) -> MUST BE TARGETED_TRASH
-    social_old = create_sample_message(
-        mid="social_old_1",
-        sender="LinkedIn",
-        sender_email="updates@linkedin.com",
-        sender_domain="linkedin.com",
-        subject="You have 3 new notifications on LinkedIn",
-        snippet="See who viewed your profile",
-        labels=["CATEGORY_SOCIAL"],
-        date=now - timedelta(days=21),
-    )
-    res_social_old = scorer.evaluate(social_old)
-    assert res_social_old.is_protected is False
-    assert res_social_old.action == "TARGETED_TRASH"
-    assert res_social_old.score == 1.0
-    assert "Social" in res_social_old.reason
-
-    # 5. Recent Purchase order update (6 days old) -> MUST BE PROTECTED
-    purchase_recent = create_sample_message(
-        mid="purch_recent_1",
-        sender="Amazon.com",
-        sender_email="auto-confirm@amazon.com",
-        sender_domain="amazon.com",
-        subject="Your Amazon.com order #102-392019 has shipped",
-        snippet="Track your package for your order",
-        labels=["CATEGORY_PURCHASES"],
-        date=now - timedelta(days=6),
-    )
-    res_purch_recent = scorer.evaluate(purchase_recent)
-    assert res_purch_recent.is_protected is True
-    assert res_purch_recent.action == "PROTECTED"
-    assert "Purchases" in res_purch_recent.reason
-
-    # 6. Expired Purchase order update (30 days old) -> MUST BE TARGETED_TRASH
-    purchase_old = create_sample_message(
-        mid="purch_old_1",
-        sender="Amazon.com",
-        sender_email="auto-confirm@amazon.com",
-        sender_domain="amazon.com",
-        subject="Your Amazon.com order #102-392019 has shipped",
-        snippet="Track your package for your order",
-        labels=["CATEGORY_PURCHASES"],
+    # 1. Zoom recording email (30 days old) -> MUST BE PROTECTED
+    zoom_msg = create_sample_message(
+        mid="zoom_001",
+        sender="Zoom Video Communications",
+        sender_email="no-reply@zoom.us",
+        sender_domain="zoom.us",
+        subject="Cloud Recording - Weekly Team Sync is now available",
+        snippet="Your recording is ready to view. Access your recording online.",
         date=now - timedelta(days=30),
     )
-    res_purch_old = scorer.evaluate(purchase_old)
-    assert res_purch_old.is_protected is False
-    assert res_purch_old.action == "TARGETED_TRASH"
-    assert res_purch_old.score == 1.0
-    assert "Purchases" in res_purch_old.reason
+    res_zoom = scorer.evaluate(zoom_msg)
+    assert res_zoom.is_protected is True
+    assert res_zoom.action == "PROTECTED"
+    assert "recording" in res_zoom.reason.lower()
 
-    # 7. Starred purchase email (40 days old) -> MUST REMAIN PROTECTED
-    purchase_starred = create_sample_message(
-        mid="purch_starred_1",
-        sender="Amazon.com",
-        sender_email="auto-confirm@amazon.com",
-        sender_domain="amazon.com",
-        subject="Your Amazon.com order confirmation",
-        snippet="Order details",
-        is_starred=True,
-        labels=["CATEGORY_PURCHASES"],
-        date=now - timedelta(days=40),
+    # 2. Google Drive / Docs shared link (45 days old) -> MUST BE PROTECTED
+    drive_msg = create_sample_message(
+        mid="drive_001",
+        sender="Alice Partner",
+        sender_email="alice@partner.com",
+        sender_domain="partner.com",
+        subject="Project Roadmap & Specifications",
+        snippet="Here is the link to the file on drive.google.com/file/d/12345/view",
+        date=now - timedelta(days=45),
     )
-    res_starred = scorer.evaluate(purchase_starred)
-    assert res_starred.is_protected is True
-    assert res_starred.action == "PROTECTED"
+    res_drive = scorer.evaluate(drive_msg)
+    assert res_drive.is_protected is True
+    assert res_drive.action == "PROTECTED"
+    assert "link" in res_drive.reason.lower() or "drive" in res_drive.reason.lower()
 
-    # 8. Tax form / bank statement (50 days old) -> MUST REMAIN PROTECTED (Exempt)
-    bank_doc = create_sample_message(
-        mid="bank_doc_1",
-        sender="Bank",
-        sender_email="statements@mybank.com",
-        sender_domain="mybank.com",
-        subject="Your annual 1099 tax form and bank statement",
-        snippet="Download your official tax document",
-        labels=["CATEGORY_PURCHASES"],
-        date=now - timedelta(days=50),
+    # 3. Loom video recording -> MUST BE PROTECTED
+    loom_msg = create_sample_message(
+        mid="loom_001",
+        sender="Bob Developer",
+        sender_email="bob@startup.io",
+        sender_domain="startup.io",
+        subject="Loom: Walkthrough of the new UI dashboard",
+        snippet="Watch Bob's video on Loom",
+        date=now - timedelta(days=20),
     )
-    res_bank = scorer.evaluate(bank_doc)
-    assert res_bank.is_protected is False or res_bank.action != "TARGETED_TRASH"
-    assert "Expired Category" not in res_bank.reason
+    res_loom = scorer.evaluate(loom_msg)
+    assert res_loom.is_protected is True
+    assert res_loom.action == "PROTECTED"
+    assert "loom" in res_loom.reason.lower()
+
+def test_sender_wide_immunity_from_recording_senders():
+    """Verify that senders who have sent recordings or shared links grant immunity to all their emails."""
+    wl_config = WhitelistConfig()
+    guard = WhitelistGuard(wl_config, expire_security_alerts=True, security_alerts_retention_days=14)
+    scorer = SpamScorer(guard, CustomRulesMatcher(CustomRulesConfig()), DetectionSettings())
+    now = datetime.now(timezone.utc)
+
+    # 1. First message from mentor: contains a meeting recording
+    msg1_recording = create_sample_message(
+        mid="mentor_001",
+        sender="Mentor John",
+        sender_email="john@mentorship.org",
+        sender_domain="mentorship.org",
+        subject="Session Recording: Career Guidance",
+        snippet="Here is the zoom recording from our chat today.",
+        date=now - timedelta(days=10),
+    )
+    res1 = scorer.evaluate(msg1_recording)
+    assert res1.is_protected is True
+    assert "recording" in res1.reason.lower()
+    assert "john@mentorship.org" in guard.recording_senders
+
+    # 2. Second message from same mentor: regular discussion with NO recording/link keywords
+    msg2_regular = create_sample_message(
+        mid="mentor_002",
+        sender="Mentor John",
+        sender_email="john@mentorship.org",
+        sender_domain="mentorship.org",
+        subject="Quick follow up regarding next steps",
+        snippet="Let me know how the interview went yesterday.",
+        date=now - timedelta(days=2),
+    )
+    res2 = scorer.evaluate(msg2_regular)
+    assert res2.is_protected is True
+    assert res2.action == "PROTECTED"
+    assert "trusted sender has sent recordings/links" in res2.reason.lower()
+
+def test_regular_emails_older_than_14_days_not_auto_deleted():
+    """Verify that normal non-security emails >14 days old are NOT automatically trashed."""
+    wl_config = WhitelistConfig()
+    guard = WhitelistGuard(wl_config, expire_security_alerts=True, security_alerts_retention_days=14)
+    scorer = SpamScorer(guard, CustomRulesMatcher(CustomRulesConfig()), DetectionSettings())
+    now = datetime.now(timezone.utc)
+
+    # 1. Normal clean newsletter/email older than 14 days (e.g., 25 days old)
+    clean_old_email = create_sample_message(
+        mid="clean_old_001",
+        sender="Tech Digest",
+        sender_email="newsletter@techdigest.com",
+        sender_domain="techdigest.com",
+        subject="Python 3.13 Release Notes and Performance Insights",
+        snippet="Here are the top performance improvements in Python 3.13.",
+        labels=["INBOX"],
+        date=now - timedelta(days=25),
+        auth_results="spf=pass dkim=pass",
+    )
+    res_clean = scorer.evaluate(clean_old_email)
+    # Must NOT be TARGETED_TRASH; score should be 0.0 SAFE
+    assert res_clean.action != "TARGETED_TRASH"
+    assert res_clean.score < 0.75
+
+    # 2. But 1-time throwaway login alert older than 14 days DOES expire
+    login_alert_old = create_sample_message(
+        mid="login_old_001",
+        sender="Google",
+        sender_email="no-reply@accounts.google.com",
+        sender_domain="google.com",
+        subject="Security alert: New sign-in on Windows",
+        snippet="Your Google Account was just signed in to from a new Windows device.",
+        date=now - timedelta(days=20),
+    )
+    res_alert = scorer.evaluate(login_alert_old)
+    assert res_alert.action == "TARGETED_TRASH"
+    assert res_alert.score == 1.0
+    assert "Expired" in res_alert.reason
 
 if __name__ == "__main__":
     test_whitelist_protection_keywords()
@@ -570,5 +542,7 @@ if __name__ == "__main__":
     test_security_alerts_google_invoices_protected()
     test_security_alerts_auto_expire_disabled()
     test_github_and_multiplatform_login_alerts_expiration()
-    test_category_expiration_promotions_social_purchases()
-    print("All engine, security alert, and category lifecycle tests passed successfully!")
+    test_recordings_and_links_immunity()
+    test_sender_wide_immunity_from_recording_senders()
+    test_regular_emails_older_than_14_days_not_auto_deleted()
+    print("All engine, security alert, recording immunity, and sender-wide safeguard tests passed successfully!")

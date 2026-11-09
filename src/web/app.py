@@ -33,7 +33,7 @@ from src.auth.user_manager import UserManager
 from src.config_loader import ConfigManager
 from src.engine.custom_rules import CustomRulesMatcher
 from src.engine.spam_scorer import ClassificationResult, SpamScorer
-from src.engine.whitelist_guard import WhitelistGuard
+from src.engine.whitelist_guard import WhitelistGuard, is_recording_or_resource_message
 from src.storage.audit_logger import AuditLogger
 
 # Guaranteed fail-safe: Ensure add_app_password_account exists on GmailAuthenticator
@@ -735,6 +735,12 @@ with tab_scan:
                             elif "purchase" in cat_label and "CATEGORY_PURCHASES" not in m.labels:
                                 m.labels.append("CATEGORY_PURCHASES")
 
+                    # Pre-scan for recording and shared link senders to grant sender-wide immunity
+                    for m in messages:
+                        has_res, _ = is_recording_or_resource_message(m)
+                        if has_res and m.sender_email:
+                            whitelist_guard.recording_senders.add(m.sender_email.lower())
+
                     results = [scorer.evaluate(m) for m in messages]
                     scan_progress.empty()
 
@@ -1220,61 +1226,12 @@ with tab_whitelist:
 
     st.divider()
 
-    st.subheader("🛍️ Ephemeral Categories Lifecycle (Promotions, Social & Purchases)")
-    st.caption(
-        "Promotional marketing emails, social network updates, and purchase/order delivery notifications are kept for 14 days. "
-        "After the 14-day retention period, they are automatically flagged for cleanup. Starred emails remain 100% immune forever."
+    st.subheader("🎥 Recordings & Shared Links Safeguard")
+    st.markdown(
+        "Emails containing video/audio recordings (**Zoom, Loom, recordings, transcripts, podcast**) or shared links and cloud documents "
+        "(**Google Drive, Google Docs, Dropbox, OneDrive, SharePoint, Box, Notion, WeTransfer**) are **permanently immune from deletion**.\n\n"
+        "✨ **Smart Sender Protection**: When a sender sends you a recording or a shared link, that sender is automatically remembered and **all messages from that sender** are granted complete immunity."
     )
-    col_c1, col_c2 = st.columns([2, 1])
-    with col_c1:
-        new_cat_expire = st.checkbox(
-            "Auto-expire and trash old Promotion, Social, and Purchase emails",
-            value=config_mgr.app_config.detection.expire_old_categories,
-            help="When checked, emails in Promotions, Social, or Purchases older than the retention period are sent to Trash. Recent ones remain protected."
-        )
-    with col_c2:
-        cat_retention_options = [7, 14, 21, 30]
-        curr_cat_ret = config_mgr.app_config.detection.categories_retention_days
-        curr_cat_idx = cat_retention_options.index(curr_cat_ret) if curr_cat_ret in cat_retention_options else 1
-        new_cat_retention = st.selectbox(
-            "Category Retention Window",
-            options=cat_retention_options,
-            index=curr_cat_idx,
-            format_func=lambda x: f"{x} days ({'Recommended' if x == 14 else 'Aggressive' if x == 7 else 'Extended'})",
-            disabled=not new_cat_expire,
-            key="cat_retention_selectbox",
-            help="14 days is recommended: keeps recent receipts, order tracking, and social notices active while clearing old marketing clutter."
-        )
-
-    # Category selector checkboxes
-    st.caption("Active Categories for Expiration:")
-    ch_c1, ch_c2, ch_c3 = st.columns(3)
-    curr_cats = config_mgr.app_config.detection.expired_categories
-    with ch_c1:
-        exp_promo = st.checkbox("🏷️ Promotions", value=("promotions" in curr_cats), disabled=not new_cat_expire)
-    with ch_c2:
-        exp_social = st.checkbox("👥 Social", value=("social" in curr_cats), disabled=not new_cat_expire)
-    with ch_c3:
-        exp_purchases = st.checkbox("🛍️ Purchases", value=("purchases" in curr_cats), disabled=not new_cat_expire)
-
-    updated_cats = []
-    if exp_promo:
-        updated_cats.append("promotions")
-    if exp_social:
-        updated_cats.append("social")
-    if exp_purchases:
-        updated_cats.append("purchases")
-
-    if (
-        new_cat_expire != config_mgr.app_config.detection.expire_old_categories
-        or new_cat_retention != config_mgr.app_config.detection.categories_retention_days
-        or updated_cats != curr_cats
-    ):
-        config_mgr.app_config.detection.expire_old_categories = new_cat_expire
-        config_mgr.app_config.detection.categories_retention_days = new_cat_retention
-        config_mgr.app_config.detection.expired_categories = updated_cats
-        config_mgr.save_app_config(config_mgr.app_config)
-        st.success("Updated category lifecycle settings!")
 
     st.divider()
 
